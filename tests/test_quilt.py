@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 # import internal modules
-from imagequilt import calc_distance, quilt
+from old.imagequilt import calc_distance, quilt
 
 
 class TestDistance(unittest.TestCase):

@@ -4,91 +4,42 @@
 from __future__ import division
 
 # import 3rd party modules
-import numpy as np
-from numpy import power, sqrt, floor, ceil
-from scipy import ndimage
+from numpy import einsum
+from numpy.lib.stride_tricks import as_strided
 
 
-def ssd(X, Y):
-    """
-    Computes the sum of squared distances between X and Y for each possible
-    overlap of Y on X. Y is thus smaller than X
-
-    Inputs:
-       X - larger image
-       Y - smaller image
-
-    Outputs:
-       Each pixel of Z contains the ssd for Y overlaid on X at that pixel
-    """
-
-    mask = np.ones((Y.shape[0], Y.shape[1]))
-
-    # for every channel
-    for k in range(0, X.shape[2]):
-        A = X[:, :, k]
-        B = Y[:, :, k]
-
-        # conv2(image, mask) is the same as filter2(rot90(mask,2), image)
-        a2 = filter2(mask, power(A, 2), 'valid')
-        b2 = sum(sum(power(B, 2)))
-        ab = filter2(B, A, 'valid') * 2
-
-        r = (a2 - ab) + b2
-        r[r < 0] = 0  # approximation errors
-
-        if k == 0:
-            result = sqrt(r)
-        else:
-            result = result + sqrt(r)
-
-    # print '\nssd: X:', X.shape, 'Y:', Y.shape, 'RES:', result.shape
-
+def ssd(img, patch):
+    result = 0
+    for k in range(0, img.shape[2]):
+        result = result + sumsqdiff3(img[:, :, k], patch[:, :, k])
     return result
 
 
-def filter2(mask, image, mode='same'):
-    # conv2(image, mask) = filter2(rot90(mask,2), image)
-    # filter2(mask, image) = conv2(image, rot90(mask, -2)))
-    mask = np.rot90(mask, -2)
-    return conv2(image, mask, mode=mode)
-
-
-def conv2(x, y, mode='same'):
+def sumsqdiff3(img, patch):
     """
-    Emulate the function conv2 from Mathworks.
+    We want to calculate the difference between patch and img.
+    So we want a matrix M where:
+        M(i, j) = sum( (img[i.., j..]-patch)^2 ) =
+        sum(img[i.., j..]^2) + sum(patch^2) - 2*img[i.., j..]*patch
+    (squared diff so negative and positive values don't cancel each other).
+    This multiply-then-reduce-with-a-sum operations can be expressed through
+    Einstein summation (einsum), with a substantial improvement in both
+    performance and memory use.
 
-    Usage:
-    z = conv2(x,y,mode='same')
-
-    TODO:
-     - Support other modes than 'same' (see conv2.m)
+    To improve the performance, img can be represented as strided (y).
     """
 
-    if not (mode == 'same' or mode == 'valid'):
-        raise Exception("Mode not supported")
+    patch_size = patch.shape
+    # stride is the step through the memory to fast access data
+    y = as_strided(img,
+                   shape=(img.shape[0] - patch_size[0] + 1,
+                          img.shape[1] - patch_size[1] + 1,) + patch_size,
+                   strides=img.strides * 2)
+    ssd = einsum('ijkl,kl->ij', y, patch)       # sum(a*b)
+    ssd *= - 2
+    ssd += einsum('ijkl, ijkl->ij', y, y)       # sum(a**2)
+    ssd += einsum('ij, ij', patch, patch)       # sum(b**2)
 
-    # Add singleton dimensions
-    if len(x.shape) < len(y.shape):
-        dim = x.shape
-        for i in range(len(x.shape), len(y.shape)):
-            dim = (1,) + dim
-        x = x.reshape(dim)
-    elif len(y.shape) < len(x.shape):
-        dim = y.shape
-        for i in range(len(y.shape), len(x.shape)):
-            dim = (1,) + dim
-        y = y.reshape(dim)
-
-    origin = (0, 0)
-
-    z = ndimage.filters.convolve(x, y, mode='constant', origin=origin)
-
-    if mode == 'valid':
-        # reduce the result to just valid values
-        i = y.shape[0]
-        j = y.shape[1]
-        z = z[floor((i - 1) / 2): (- ceil((i - 1) / 2) or None),
-              floor((j - 1) / 2): (- ceil((j - 1) / 2) or None)]
-    return z
+    ssd[ssd < 0] = 0  # approximation errors
+    return ssd
 
