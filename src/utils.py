@@ -84,7 +84,7 @@ def save(img, path):
     # handle singles or stacks
     if isinstance(img, list):
         if not isinstance(path, list) or not len(img) == len(path):
-            raise ValueError('if images are in stack, do should be paths')
+            raise ValueError('if images are in stack, so should be paths')
     else:
         img = [img]
         path = [path]

@@ -14,18 +14,20 @@ Inputs
 from __future__ import division
 from copy import deepcopy
 from multiprocessing import cpu_count, Queue, Pool, JoinableQueue
+import time
 import sys
 sys.path.insert(0, r"C:\dev\textures\Lib\site-packages")
 
 # import 3rd party modules
 import numpy as np
-from numpy import power, ceil, multiply, where, rot90, floor, zeros
+from numpy import power, ceil, multiply, where, rot90, inf, zeros
 from numpy.random import rand
+from scipy.misc import imresize
 
 # import internal modules
 from ssd import ssd
 from mincut import mincut
-from utils import gray2rgb, filter_img, rgb2gray, im2double, show, save, sub2ind
+from utils import gray2rgb, filter_img, rgb2gray, im2double, show, save
 
 
 def unwrap_self(*arg, **kwarg):
@@ -37,7 +39,57 @@ class Quilt:
     def __init__(self, X, Y=None, Xmask=None, Ymask=None,
                  rotations=0, tilesize=None, overlap=None, num_tiles=None,
                  big_tilesize=500, big_overlap=50,
-                 err=0.002, niter=3, result_path=None):
+                 err=0.002, result_path=None, constraint_start=False,
+                 cores=None):
+        """
+        Initialize Quilt class. Sets all the necessary parameters.
+
+        Args:
+            X: source image. Can be a list of images, where the first one is the
+               master one (e.g. [color, bump, spec]). The result will be a stack
+               with the same number of images.
+            Y: destination image.
+               ASSUMED NONE
+
+            Xmask: black and white image to mask region of the source one you
+                   don't want to appear in the output.
+                      - white: remove
+                      - black: pass
+                   If present must have the same size of X.
+            Ymask: black and white image to describe the shape of dest image.
+                      - white: to be filled with texture
+                      - black: remains empty
+                   TO BE IMPLEMENTED
+
+            rotations: number of rotations of 90 degrees to apply to the source
+                       texture in order to increase the variety of patches.
+
+            tilesize: size of the tile used to perform the computation.
+            overlap: size of the overlap.
+                     If present, has to be < tilesize. Default: tilesize / 5.
+            num_tiles: numbers of tiles the destination image (Y) will be
+                       composed of.
+                       If not present, Y's size will be learned from Ymask.
+            big_tilesize: size of the tiles to use in the first process. Each
+                          of the child processes will compute quilting in one
+                          of the big tiles.
+            big_overlap: size of the overlap associated to the big tile.
+                         If present, must be < big_tilesize.
+                         Default: big_tilesize / 3.
+
+            err: amount to error accepted when selecting the best matching
+                 patches.
+            result_path: path for the temporary results.
+            constraint_start: flag to define a constraint on the first patch
+                              (top left corner) of the dst image:
+                               - False: random
+                               - True: pick the first patch of the src image
+            cores: number of available cores
+
+        in the future...
+            mirror
+            niter
+        """
 
         # tile size and overlap
         if overlap >= tilesize:
@@ -54,7 +106,7 @@ class Quilt:
         print 'Xmask:', Xmask is None and 'None' or self.Xmask.shape
 
         # dst
-        self.num_tiles = self.set_num_tiles(num_tiles)
+        self.num_tiles = self.val2tuple(num_tiles)
         print 'num tiles:', self.num_tiles
 
         # size of Y: depends of the number of tiles or the size of the Y-mask
@@ -84,76 +136,107 @@ class Quilt:
         if err < 0:
             raise ValueError('Error must be a positive number')
         self.err = err
-
-        # number of iterations
-        if niter < 1:
-            raise ValueError('Number of iterations must be at least 1')
-        self.niter = niter
-
+        self.constraint_start = constraint_start
         self.result_path = result_path
+        self.cores = cores or cpu_count()-2
 
     def _set_src(self, img, rotate=0):
+        """
+        Manages source image/s:
+            - turns it into a stack of images of the same size
+            - images are set to float values in range [0, 1]
+            - rotated images are added if required
+        Args:
+            img: source image/s: can be a single image or a stack of images of
+                 the same size
+            rotate: number of 90 degrees rotations to apply to each image in
+                    the stack.
 
-        # img can be a single image or a list of images
+        Returns:
+            - reference image (the first image of the stack with no rotations)
+            - stack of the source images
+        """
+        # stack of images
         if not isinstance(img, list):
             img = [img]
 
         reference = None
         for i in xrange(len(img)):
-            # the size of the chained img must be equal to the size of the first
+            # images in the stack must have the same size
             if i and not img[i].shape[0:2] == img[0].shape[0:2]:
                 raise ValueError('Chained images must have the same size. Got '
                                  '{0} and {1}'.format(img[i].shape[0:2],
                                                       img[0].shape[0:2]))
-            # dimensions
+            # 3 channel images
             img[i] = gray2rgb(img[i])
-            # values
+            # float values in range [0, 1]
             img[i] = im2double(img[i])
             if not i:
                 reference = img[i]
             # rotation
             img[i] = self.create_rotations(img[i], rotate)
 
+        show(img[0])
+
         return reference, img
 
     def _set_src_mask(self, mask, reference=None, rotate=0):
+        """
+        Manages the mask of the source image (if present):
+            - checks the mask has the same size of the source image
+            - turns it into a 1-channel image with values in {0, infinite}
+            - expands masked areas:
+              for every masked (= white) pixel: all the pixels tilesize-distant
+              from it are masked. In this way all the tiles containing that
+              pixel are removed. This is used in the calculation of the
+              convolution between a patch and the source image.
 
+        Args:
+            mask: input mask
+            reference: master source image without rotation
+            rotate: number of 90 degrees rotations to be applied to the mask
+
+        Returns:
+            mask
+        """
         # no mask
         if mask is None:
             print 'Xmask: None'
             return
 
         # coherent with reference
-        reference = reference or self.X
+        if reference is None:
+            reference = self.X
         if not mask.shape[0:2] == reference.shape[0:2]:
             raise ValueError('X and Xmask cannot have different sizes:'
                              'X={0} Xmask={1}'.format(reference.shape,
                                                       mask.shape))
-        # size
+        # one channel image
         mask = rgb2gray(mask)
-        if not rotate and not mask.shape == reference.shape[0:2]:
-            raise ValueError('X and Xmask cannot have different sizes')
 
-        # values
-        # if there is a mask on the input: remove all the points leading to
-        # patches with an overlap on that area. i.e.: remove the area and
-        # anything a tile-size distant on the left or top.
-        # to remove an area: replace it with inf value so that it won't be
-        # chose computing the min.
+        # values in {0, inf}
         mask = im2double(mask)
-        mask[mask < 0.7] = np.inf
+        mask[mask < 0.7] = inf
         mask[mask < 1] = 0
+
         # rotate
         mask = self.create_rotations(mask, rotate)
 
-        # expand the values
+        # expand masked values:
+        # if there is a mask on the input: remove all the points leading to
+        # patches with an overlap on that area. i.e.: mask the area and
+        # anything a tile-size distant on the left or top.
+        # The mask will be summed to the convolution result. Doing so, when
+        # searching the min of the convolution, masked areas will not be
+        # considered since their value is infinite.
         for i in xrange(mask.shape[0] - self.tilesize):
             for j in xrange(mask.shape[1] - self.tilesize):
+                # get the tile starting from the pixel
                 tile = mask[i:i + self.tilesize, j:j + self.tilesize]
-                if np.any(tile == np.inf):
-                    mask[i, j] = np.inf
-
-        mask = mask[:-self.tilesize + 1, :-self.tilesize + 1]
+                # if it contains a masked value: also the pixel generating the
+                # tile has to be masked
+                if np.any(tile == inf):
+                    mask[i, j] = inf
 
         # show
         temp = deepcopy(mask)
@@ -164,31 +247,58 @@ class Quilt:
         return mask
 
     def _set_dst(self, img, size):
+        """
+        Manages the destination image, if given.
+            - if no image is given, a zero-image is created according to size
+            - the image is turned into a stack of images. The size of the stack
+              is equal to the size of the stack of the source image.
+        Args:
+            img: destination image. Can be None
+            size: image size
+
+        Returns:
+            stack of destination images.
+        """
+        # zero-value image
         if img is None:
-            img = np.zeros((size[0], size[1], 3))
-        # we will have as many output layers as we got as input
-        res = [deepcopy(img) for i in xrange(len(self.X))]
+            img = zeros((size[0], size[1], 3))
+        # stack of images
+        res = [deepcopy(img) for _ in xrange(len(self.X))]
         return res
 
     def _set_dst_mask(self, mask, size):
+        """
+        Manages the mask for the destination image, if present.
+         The mask is turned into a binary image of the same size of the
+         destination image.
 
+        Args:
+            mask: mask of the destination image
+            size: size of the destination image
+
+        Returns:
+            mask of the destination image
+        """
         if mask is None:
             print 'Ymask: None'
             return
 
-        # channels
+        # 1 channel
         if len(mask.shape) == 3:
             mask = rgb2gray(mask)
         elif not len(mask.shape) == 1:
             raise ValueError('Input mask must be 2 or 3 dimensional')
 
-        # size
-        if mask.shape[0] >= size[0]:
-            mask = mask[:size[0], :]
-        if mask.shape[1] >= size[1]:
-            mask = mask[:, size[1]]
+        # resize it according to size
+        mask = imresize(mask, size)/255
 
-        # values
+        # size: same of destination img
+        # if mask.shape[0] >= size[0]:
+        #     mask = mask[:size[0], :]
+        # if mask.shape[1] >= size[1]:
+        #     mask = mask[:, size[1]]
+
+        # binary values
         mask[mask < 0.01] = 0
         mask[mask > 0] = 1
 
@@ -197,60 +307,96 @@ class Quilt:
 
     @classmethod
     def create_rotations(cls, img, amount):
-
+        """
+        Generates the required rotations of the input image and builds an image
+        containing the input image and its rotations (the remaining space is
+        left zero). The final image is so composed:
+                          _______
+        If amount == 2:  | rot0  |
+                         |_______|
+                         |rot180 |
+                         |_______|
+                          _______ _____ _____
+        If amount == 4:  | rot0  |     |     |
+                         |_______| rot | rot |
+                         |rot180 | 90  | -90 |
+                         |_______|_____|_____|
+        Args:
+            img: image to be rotated
+            amount: amount of rotation of 90 degrees.
+                    E.g.: amount = 2 --> rotation = 90*2 = 180
+                    Accepted values: {0, 2, 4}
+        Returns:
+            image composed of the input one and it rotations
+        """
+        # check the amount
         if not amount:
             return img
         if amount not in [2, 4]:
             raise ValueError('Rotation must be None, 2 or 4. Got {0}'.format(
                 amount))
 
-        # could be better ...
+        # turn the input image into a 3-channel image
         third_dim = len(img.shape) == 3
         img = gray2rgb(img)
 
         rot = None
         if amount == 2:
-            # create a bigger image with the two rotations
-            rot = np.zeros((img.shape[0] * 2 + 1, img.shape[1], 3))
+            rot = zeros((img.shape[0] * 2 + 1, img.shape[1], 3))
             rot[:img.shape[0], :, :] = img
             rot[img.shape[0] + 1:, :, :] = rot90(img, 2)
 
         if amount == 4:
-            # create a bigger image with the four rotations
-            rot = np.zeros((max(img.shape[1], img.shape[0] * 2 + 1),
+            rot = zeros((max(img.shape[1], img.shape[0] * 2 + 1),
                             img.shape[1] + img.shape[0] * 2 + 2, 3))
             rot[:img.shape[0], :img.shape[1], :] = img
             rot[img.shape[0] + 1: img.shape[0] * 2 + 1, :img.shape[1], :] = \
                 rot90(img, 2)
             rot[:img.shape[1], img.shape[1] + 1:img.shape[1] + 1 + img.shape[0],
-            :] = \
-                rot90(img, 1)
+                :] = rot90(img, 1)
             rot[:img.shape[1], img.shape[0] + img.shape[1] + 2:, :] = \
                 rot90(img, 3)
 
+        # if the input image had 1 channel only, also the result will do
         if not third_dim:
             rot = rot[:, :, 0]
+
         return rot
 
-    def set_overlap(self, overlap):
-        if overlap >= self.tilesize:
-            raise ValueError('Overlap must be less than tilesize')
-        self.overlap = overlap
+    @classmethod
+    def val2tuple(cls, val):
+        """
+        Turns a value in a list [value, value].
+        If the value is a list of one element, it appends the element again.
 
-    def set_tilesize(self, size):
-        if self.overlap >= size:
-            raise ValueError('Overlap must be less than tilesize')
-        self.tilesize = size
+        Args:
+            val: value to be transformed
 
-    def set_num_tiles(self, num):
-        # make it a list with 2 elements
-        if not isinstance(num, list):
-            num = [num, num]
-        elif len(num) == 1:
-            num = [num[0], num[0]]
-        return num
+        Returns:
+            a list with two values
+        """
+        if not isinstance(val, list):
+            val = [val, val]
+        elif len(val) == 1:
+            val = [val[0], val[0]]
+        return val
 
     def calc_num_tiles(self, img_size=None, tile_size=None, overlap=None):
+        """
+        Calculates the number of tiles in an image. If the resulting number is
+        not int, its ceil is returned.
+
+        Args:
+            img_size: size of the image to be filled with tiles.
+                      Default: size of the destination image
+            tile_size: size of the tile
+                       Default: self.tilesize
+            overlap: size of the overlap
+                     Default: self.overlap
+
+        Returns:
+            the number of tiles that fits in the image.
+        """
         img_size = img_size or self.Y[0].shape
         tile_size = tile_size or self.tilesize
         overlap = overlap or self.overlap
@@ -260,6 +406,10 @@ class Quilt:
         return num_tiles
 
     def get_result(self):
+        """
+        Returns:
+            result of quilting.
+        """
         return self.Y
 
     def compute(self):
@@ -297,7 +447,7 @@ class Quilt:
                     x_patch = self.X[0][sub[0]:sub[0]+self.tilesize,
                                         sub[1]:sub[1]+self.tilesize]
                     y_patch = self.Y[0][startI:endI, startJ:endJ, :]
-                    mask = self.compute_mask(x_patch, y_patch, coord=[i, j])
+                    mask = self.calc_patch_mask(x_patch, y_patch, coord=[i, j])
                     for idx, x in enumerate(self.X):
                         x_patch = x[sub[0]:sub[0]+self.tilesize,
                                     sub[1]:sub[1]+self.tilesize]
@@ -316,16 +466,34 @@ class Quilt:
             if self.result_path:
                 save(self.Y, self.result_path)
 
-    def distance(self, patch, coord=None, tilesize=None, overlap=None):
+    def distance(self, patch, coord=None, tilesize=None, overlap=None,
+                 use_mask=True):
+        """
+        Calculates the distance between a the overlap regions of a given patch
+        and the source. Considered overlaps: left and top of the patch.
+        Optionally, it sums the mask of the source image to the result.
 
+        Args:
+            patch: patch whose distance from the source we want to compute.
+            coord: coordinates of the patch in the destination image.
+                    The coordinates are expressed in tile-space (i.e. number of
+                    tiles, not of pixels)
+            tilesize: size of the tile. Default: self.tilesize
+            overlap: size of the overlap. Default: self.overlap
+            use_mask: flag to specify if to use or not the source mask to remove
+                      unwanted areas from the difference.
+
+        Returns:
+            matrix containing the distance between the overlaps of the patch
+            and the master source image. The size of the distance matrix is
+            equal to the size of the source image, minus the size of the tile.
+        """
         [i, j] = coord
-        tilesize = tilesize or self.tilesize
-        if len(tilesize) == 1:
-            tilesize = [tilesize, tilesize]
+        tilesize = self.val2tuple(tilesize or self.tilesize)
         overlap = overlap or self.overlap
         
-        distances = np.zeros((self.X[0].shape[0] - tilesize[0],
-                              self.X[0].shape[1] - tilesize[1]))
+        distances = zeros((self.X[0].shape[0] - tilesize[0],
+                           self.X[0].shape[1] - tilesize[1]))
 
         # Compute the distances from the src to the left overlap region
         if j > 0:
@@ -348,19 +516,28 @@ class Quilt:
             z = z[0: -tilesize[0] + overlap, 0: -tilesize[1] + overlap]
             distances = distances + z
 
-        # if there is a mask on the input: remove all the points leading to
-        # patches with an overlap on that area. i.e.: remove the area and
-        # anything a tile-size distant on the left or top
-        # to remove an area: replace it with inf value so that it won't be
-        # chose computing the min.
-        if self.Xmask is not None:
+        # if there is a mask of the source: sum it to the distance matrix. In
+        # this way masked pixels appear to have a big distance value, while
+        # unmasked pixels keep their real distance value.
+        if use_mask and self.Xmask is not None:
             distances = distances + self.Xmask[:distances.shape[0],
                                                :distances.shape[1]]
-
         return distances
 
-    def compute_mask(self, src, dst, coord=None, overlap=None):
+    def calc_patch_mask(self, src, dst, coord=None, overlap=None):
+        """
+        Calculates the mask of the overlaps of two patches according to the
 
+
+        Args:
+            src:
+            dst:
+            coord:
+            overlap:
+
+        Returns:
+
+        """
         [i, j] = coord
         overlap = overlap or self.overlap
 
@@ -405,17 +582,24 @@ class Quilt:
          for each of the tile: process n
 
         """
-        print '\nPYMAXFLOW MULTIPROCESSING COMPUTING ...'
+        print '\nMULTIPROCESSING COMPUTING ...'
 
         big_num_tiles = self.calc_num_tiles(tile_size=self.big_tilesize,
                                             overlap=self.big_overlap)
 
         # prepare the pool
-        n_proc = min(big_num_tiles[0]*big_num_tiles[1], cpu_count()-2)
-        out_queue = JoinableQueue()
-        in_queue = Queue()
+        n_proc = min(big_num_tiles[0]*big_num_tiles[1], self.cores)
+        out_queue = Queue()
+        in_queue = JoinableQueue()
         pool = Pool(n_proc, unwrap_self, (self, in_queue, out_queue,))
-        print 'preparing', n_proc, 'processes'
+        print 'preparing', n_proc, 'processes', time.strftime("%H:%M:%S")
+
+        if self.Ymask is not None:
+            # zero values will become inf
+            Ymask_rgb = gray2rgb(self.Ymask)
+            # use the mask as a draft of the dst img so that boundaries are
+            # respected
+            self.Y[0] = deepcopy(Ymask_rgb)
 
         for i in xrange(big_num_tiles[0]):
 
@@ -433,32 +617,36 @@ class Quilt:
                 if sizeJ <= self.overlap:
                     continue
 
-                if self.Ymask and not np.any(self.Ymask[startI:endI,
-                                             startJ:endJ]):
-                    continue
-
                 dst_patches = [self.Y[l][startI:endI, startJ:endJ, :]
                                for l in xrange(len(self.Y))]
+                # for the big tiles don't consider the mask, since it would
+                # remove most of the image because the tiles are so big
                 res_patches = self._optimized_compute(
-                               dst_patches, [sizeI, sizeJ], [i, j])
+                    dst_patches, [sizeI, sizeJ], [i, j], use_mask=False,
+                    sew=True, constraint_start=self.constraint_start)
+                # add the mask on top
+                if self.Ymask is not None:
+                    res_patches = [r*Ymask_rgb[startI:endI, startJ:endJ]
+                                   for r in res_patches]
                 for idx, res in enumerate(res_patches):
                     self.Y[idx][startI:endI, startJ:endJ, :] = res
 
                 # make a process start in this big tile
                 _img = [y[startI:endI, startJ:endJ, :] for y in self.Y]
-                _mask = self.Ymask is not None and self.Ymask[startI:endI,
-                                                        startJ:endJ, :] or None
+                _mask = self.Ymask[startI:endI, startJ:endJ] \
+                    if self.Ymask is not None else None
                 _id = (startI, startJ)
                 in_queue.put({'dst': _img, 'mask': _mask, 'id': _id})
                 # print _id, 'launched '
 
         # wait for all the children
-        print 'master finished'
+        print 'master finished:', time.strftime("%H:%M:%S")
         show(self.Y[0])
         pool.close()
-        # print 'closed, queue:', in_queue.qsize()
-        out_queue.join()
-        # print 'all children finished'
+        print 'closed, in queue:', in_queue.qsize()
+        print '       out queue:', out_queue.qsize()
+        in_queue.join()
+        print 'all children finished', time.strftime("%H:%M:%S")
 
         # get the results
         results = sorted([out_queue.get() for _ in xrange(n_proc)])
@@ -468,8 +656,8 @@ class Quilt:
             base_patch = self.Y[0][idx[0]:idx[0] + self.big_tilesize,
                                    idx[1]:idx[1] + self.big_tilesize]
             new_patch = res[0]
-            mask_patch = self.compute_mask(base_patch, new_patch, coord=idx,
-                                           overlap=self.big_overlap)
+            mask_patch = self.calc_patch_mask(base_patch, new_patch, coord=idx,
+                                              overlap=self.big_overlap)
             # apply the mask to each layer
             for i, y in enumerate(self.Y):
                 base_patch = y[idx[0]:idx[0] + self.big_tilesize,
@@ -479,58 +667,63 @@ class Quilt:
                           idx[1]:idx[1]+self.big_tilesize, :] = \
                     filter_img(new_patch, base_patch, mask_patch)
 
+        # apply the mask again
+        if self.Ymask is not None:
+            self.Y = [r * Ymask_rgb for r in self.Y]
+
         show(self.Y[0], title='FINAL')
         if self.result_path:
-            save(self.Y, self.result_path)
+            save(self.Y[0], self.result_path)
+            print 'saving', self.result_path
 
     def optimized_compute_small(self, in_queue, out_queue):
 
-        item = in_queue.get(True)
-        dst = item['dst']
-        mask = item['mask']
-        identifier = item['id']
+        for item in iter(in_queue.get, 'STOP'):
 
-        num_tiles = self.calc_num_tiles(img_size=dst[0].shape[0:2])
-        # print identifier, 'started'
+            dst = item['dst']
+            mask = item['mask']
+            identifier = item['id']
 
-        for i in xrange(num_tiles[0]):
-            startI = i * self.tilesize - i * self.overlap
-            endI = min(dst[0].shape[0], startI + self.tilesize)
-            sizeI = endI-startI
-            if sizeI <= self.overlap:
-                continue
+            num_tiles = self.calc_num_tiles(img_size=dst[0].shape[0:2])
+            print identifier, 'started'
 
-            for j in xrange(num_tiles[1]):
-                startJ = j * self.tilesize - j * self.overlap
-                endJ = min(dst[0].shape[1], startJ + self.tilesize)
-                sizeJ = endJ - startJ
-                if sizeJ <= self.overlap:
+            for i in xrange(num_tiles[0]):
+                startI = i * self.tilesize - i * self.overlap
+                endI = min(dst[0].shape[0], startI + self.tilesize)
+                sizeI = endI-startI
+                if sizeI <= self.overlap:
                     continue
 
-                if mask is not None and not np.any(mask[startI:endI, startJ:endJ]):
-                    continue
+                for j in xrange(num_tiles[1]):
+                    startJ = j * self.tilesize - j * self.overlap
+                    endJ = min(dst[0].shape[1], startJ + self.tilesize)
+                    sizeJ = endJ - startJ
+                    if sizeJ <= self.overlap:
+                        continue
 
-                # if it is the first patch: instead of taking a random one,
-                # take it from the background image (computed by the master)
-                if i == 0 and j == 0:
-                    continue
+                    if mask is not None and not np.any(mask[startI:endI,
+                                                       startJ:endJ]):
+                        continue
 
-                dst_patches = [dst[l][startI:endI, startJ:endJ, :] for l in xrange(len(dst))]
-                res_patches = self._optimized_compute(dst_patches,
-                                                      [sizeI, sizeJ], [i, j])
+                    # if it is the first patch: instead of taking a random one,
+                    # take it from the background image (computed by the master)
+                    if i == 0 and j == 0:
+                        continue
 
-                for idx, res in enumerate(res_patches):
-                    dst[idx][startI:endI, startJ:endJ, :] = res
+                    dst_patches = [dst[l][startI:endI, startJ:endJ, :]
+                                   for l in xrange(len(dst))]
+                    res_patches = self._optimized_compute(
+                                            dst_patches, [sizeI, sizeJ], [i, j])
+                    for idx, res in enumerate(res_patches):
+                        dst[idx][startI:endI, startJ:endJ, :] = res
 
-        # if self.result_path:
-        #     save(dst, self.result_path)
+            # show(dst[0], title='FINAL {0}'.format(identifier))
+            out_queue.put([identifier, dst])
+            print identifier, ': finished, left', in_queue.qsize()
+            in_queue.task_done()
 
-        # show(dst[0], title='FINAL {0}'.format(identifier))
-        out_queue.put([identifier, dst])
-        out_queue.task_done()
-        # print identifier, ': finished, left', in_queue.qsize()
-
-    def _optimized_compute(self, y_patches, tilesize, coord):
+    def _optimized_compute(self, y_patches, tilesize, coord, use_mask=True,
+                           sew=True, constraint_start=False):
         """
         Given a patch, calculates the resulting one.
           1) finds the best matching patch
@@ -540,25 +733,40 @@ class Quilt:
             y_patches: stack of the patch to be matched
             tilesize: patch size
             coord: tile coordinates in the destination image
+            use_mask: if to use Xmask to remove unwanted parts of the image
 
         Returns:
             Matching patch from the src image, sewed with the input one
         """
-        # Dist from each tile to the overlap region
-        distances = self.distance(y_patches[0], coord=coord, tilesize=tilesize)
 
         # Find the best candidates for the match
-        best = np.min(distances)
-        candidates = where(distances <= (1 + self.err) * best)
+        if coord == [0, 0] and constraint_start:
+            # the first one of dst should be the first one of src
+            sub = [0, 0]
+        else:
+            # Dist from each tile to the overlap region
+            distances = self.distance(y_patches[0], coord=coord,
+                                      tilesize=tilesize, use_mask=use_mask)
+            best = np.min(distances)
+            candidates = where(distances <= (1 + self.err) * best)
 
-        # choose a random best
-        choice = ceil(rand() * (len(candidates[0]) - 1))
-        sub = [candidates[0][choice], candidates[1][choice]]
+            # choose a random best
+            choice = ceil(rand() * (len(candidates[0]) - 1))
+            sub = [candidates[0][choice], candidates[1][choice]]
 
-        # sew them together
         x_patch = self.X[0][sub[0]:sub[0] + tilesize[0],
                             sub[1]:sub[1] + tilesize[1]]
-        patch_mask = self.compute_mask(x_patch, y_patches[0], coord=coord)
+
+        #
+        if not sew:
+            result = []
+            for idx, x in enumerate(self.X):
+                x_patch = x[sub[0]:sub[0] + tilesize[0], sub[1]:sub[1]+tilesize[1]]
+                result.append(x_patch)
+            return result
+
+        # sew them together
+        patch_mask = self.calc_patch_mask(x_patch, y_patches[0], coord=coord)
         result = [zeros(layer.shape) for layer in y_patches]
         for idx, x in enumerate(self.X):
             x_patch = x[sub[0]:sub[0] + tilesize[0], sub[1]:sub[1]+tilesize[1]]
