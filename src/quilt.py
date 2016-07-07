@@ -20,7 +20,7 @@ sys.path.insert(0, r"C:\dev\textures\Lib\site-packages")
 
 # import 3rd party modules
 import numpy as np
-from numpy import power, ceil, multiply, where, rot90, inf, zeros
+from numpy import power, ceil, multiply, where, rot90, inf, zeros, ones
 from numpy.random import rand
 from scipy.misc import imresize
 
@@ -102,7 +102,8 @@ class Quilt:
         # src
         X, self.X = self._set_src(X, rotate=rotations)
         print 'X: len:', len(X), '- dim:', self.X[0].shape
-        self.Xmask = self._set_src_mask(Xmask, reference=X, rotate=rotations)
+        self.Xmask = self._set_src_mask(Xmask, self.tilesize, reference=X,
+                                        rotate=rotations)
         print 'Xmask:', Xmask is None and 'None' or self.Xmask.shape
 
         # dst
@@ -111,7 +112,7 @@ class Quilt:
 
         # size of Y: depends of the number of tiles or the size of the Y-mask
         if num_tiles:
-            # y_size = num * size - (num-1) * overlap
+            # y_size = n*size - (n-1)*overlap
             y_size = [self.num_tiles[0] * self.tilesize -
                       (self.num_tiles[0] - 1) * self.overlap,
                       self.num_tiles[1] * self.tilesize -
@@ -129,6 +130,8 @@ class Quilt:
             raise ValueError('Overlap must be less than the tile size')
         self.big_tilesize = min(long(big_tilesize), min(X.shape[0:2]) - 1)
         self.big_overlap = min(big_overlap, int(self.big_tilesize / 3))
+        self.Xmask_big = self._set_src_mask(Xmask, self.big_tilesize,
+                                            reference=X, rotate=rotations)
 
         # ------ independent parameters ------
 
@@ -176,11 +179,9 @@ class Quilt:
             # rotation
             img[i] = self.create_rotations(img[i], rotate)
 
-        show(img[0])
-
         return reference, img
 
-    def _set_src_mask(self, mask, reference=None, rotate=0):
+    def _set_src_mask(self, mask, tilesize, reference=None, rotate=0):
         """
         Manages the mask of the source image (if present):
             - checks the mask has the same size of the source image
@@ -201,8 +202,12 @@ class Quilt:
         """
         # no mask
         if mask is None:
-            print 'Xmask: None'
-            return
+            if rotate:
+                # create the mask to remove the lines between the rotations
+                mask = ones(reference.shape[0:2])
+            else:
+                print 'Xmask: None'
+                return
 
         # coherent with reference
         if reference is None:
@@ -214,13 +219,13 @@ class Quilt:
         # one channel image
         mask = rgb2gray(mask)
 
+        # rotate
+        mask = self.create_rotations(mask, rotate)
+
         # values in {0, inf}
         mask = im2double(mask)
         mask[mask < 0.7] = inf
-        mask[mask < 1] = 0
-
-        # rotate
-        mask = self.create_rotations(mask, rotate)
+        mask[mask <= 1] = 0
 
         # expand masked values:
         # if there is a mask on the input: remove all the points leading to
@@ -229,19 +234,19 @@ class Quilt:
         # The mask will be summed to the convolution result. Doing so, when
         # searching the min of the convolution, masked areas will not be
         # considered since their value is infinite.
-        for i in xrange(mask.shape[0] - self.tilesize):
-            for j in xrange(mask.shape[1] - self.tilesize):
+        for i in xrange(mask.shape[0] - tilesize + 1):
+            for j in xrange(mask.shape[1] - tilesize + 1):
                 # get the tile starting from the pixel
-                tile = mask[i:i + self.tilesize, j:j + self.tilesize]
+                tile = mask[i:i + tilesize, j:j + tilesize]
                 # if it contains a masked value: also the pixel generating the
                 # tile has to be masked
                 if np.any(tile == inf):
                     mask[i, j] = inf
 
         # show
-        temp = deepcopy(mask)
-        temp[temp > 0] = 1
-        show(temp)
+        # temp = deepcopy(mask)
+        # temp[temp > 0] = 1
+        # show(temp)
 
         print 'Xmask:', mask.shape, ', values:', np.unique(mask)
         return mask
@@ -347,8 +352,12 @@ class Quilt:
             rot[img.shape[0] + 1:, :, :] = rot90(img, 2)
 
         if amount == 4:
+            # set so that height < width
+            if img.shape[1] > img.shape[0]:
+                img = rot90(img, 1)
+
             rot = zeros((max(img.shape[1], img.shape[0] * 2 + 1),
-                            img.shape[1] + img.shape[0] * 2 + 2, 3))
+                         img.shape[1] + img.shape[0] * 2 + 2, 3))
             rot[:img.shape[0], :img.shape[1], :] = img
             rot[img.shape[0] + 1: img.shape[0] * 2 + 1, :img.shape[1], :] = \
                 rot90(img, 2)
@@ -360,6 +369,8 @@ class Quilt:
         # if the input image had 1 channel only, also the result will do
         if not third_dim:
             rot = rot[:, :, 0]
+
+        show(rot)
 
         return rot
 
@@ -467,7 +478,7 @@ class Quilt:
                 save(self.Y, self.result_path)
 
     def distance(self, patch, coord=None, tilesize=None, overlap=None,
-                 use_mask=True):
+                 mask=None):
         """
         Calculates the distance between a the overlap regions of a given patch
         and the source. Considered overlaps: left and top of the patch.
@@ -480,7 +491,8 @@ class Quilt:
                     tiles, not of pixels)
             tilesize: size of the tile. Default: self.tilesize
             overlap: size of the overlap. Default: self.overlap
-            use_mask: flag to specify if to use or not the source mask to remove
+            mask: mask to apply
+                  flag to specify if to use or not the source mask to remove
                       unwanted areas from the difference.
 
         Returns:
@@ -519,24 +531,34 @@ class Quilt:
         # if there is a mask of the source: sum it to the distance matrix. In
         # this way masked pixels appear to have a big distance value, while
         # unmasked pixels keep their real distance value.
-        if use_mask and self.Xmask is not None:
-            distances = distances + self.Xmask[:distances.shape[0],
-                                               :distances.shape[1]]
+        mask = mask if mask is not None else self.Xmask
+        if mask is not None:
+            distances = distances+mask[:distances.shape[0], :distances.shape[1]]
         return distances
 
     def calc_patch_mask(self, src, dst, coord=None, overlap=None):
         """
-        Calculates the mask of the overlaps of two patches according to the
+        Calculates the blend mask between two patches according to the min cut
+        in their top and left overlapping areas.
+        It computes the min-cuts of the difference between the two patches both
+        in their top and left overlapping areas. Then it uses them to build the
+        blend mask of the patch.
+                     ___________
+                    |/\_/\_/\_/_| min-cut in the top overlap
+            min-cut |\|         |
+             in the |/|  PATCH  |
+               left |\|         |
+            overlap |_|_________|
 
 
         Args:
-            src:
-            dst:
-            coord:
-            overlap:
+            src: "background" patch
+            dst: "foreground" patch
+            coord: coordinate in tile-size
+            overlap: depth of the overlap regions
 
         Returns:
-
+            blend mask: 0 where background, 1 where foreground
         """
         [i, j] = coord
         overlap = overlap or self.overlap
@@ -578,6 +600,14 @@ class Quilt:
 
     def optimized_compute_big(self):
         """
+        First process: it computes the quilt algorithm with big tiles,
+        manages child processes and them combines the results.
+
+         1) creates the child processes (number defined according to the
+            available cores and the number of big tiles in the image)
+         2) computes quilting with big tiles
+         3) every time a tile is computed (and sewed with the image), it is put
+            in a queue queri
         process 1: big tiles
          for each of the tile: process n
 
@@ -622,7 +652,7 @@ class Quilt:
                 # for the big tiles don't consider the mask, since it would
                 # remove most of the image because the tiles are so big
                 res_patches = self._optimized_compute(
-                    dst_patches, [sizeI, sizeJ], [i, j], use_mask=False,
+                    dst_patches, [sizeI, sizeJ], [i, j], mask=self.Xmask_big,
                     sew=True, constraint_start=self.constraint_start)
                 # add the mask on top
                 if self.Ymask is not None:
@@ -713,7 +743,8 @@ class Quilt:
                     dst_patches = [dst[l][startI:endI, startJ:endJ, :]
                                    for l in xrange(len(dst))]
                     res_patches = self._optimized_compute(
-                                            dst_patches, [sizeI, sizeJ], [i, j])
+                                            dst_patches, [sizeI, sizeJ], [i, j],
+                                            mask=self.Xmask)
                     for idx, res in enumerate(res_patches):
                         dst[idx][startI:endI, startJ:endJ, :] = res
 
@@ -722,7 +753,7 @@ class Quilt:
             print identifier, ': finished, left', in_queue.qsize()
             in_queue.task_done()
 
-    def _optimized_compute(self, y_patches, tilesize, coord, use_mask=True,
+    def _optimized_compute(self, y_patches, tilesize, coord, mask=None,
                            sew=True, constraint_start=False):
         """
         Given a patch, calculates the resulting one.
@@ -746,7 +777,7 @@ class Quilt:
         else:
             # Dist from each tile to the overlap region
             distances = self.distance(y_patches[0], coord=coord,
-                                      tilesize=tilesize, use_mask=use_mask)
+                                      tilesize=tilesize, mask=mask)
             best = np.min(distances)
             candidates = where(distances <= (1 + self.err) * best)
 
