@@ -6,13 +6,11 @@ Quilt command line interface
 # import builtin modules
 from __future__ import division
 import time
-import sys
 import os
-from os.path import split, splitext, join, isdir, isfile
+from os.path import split, splitext, join, isdir
 from pprint import pprint
 import glob
 from multiprocessing import cpu_count
-sys.path.insert(0, r"C:\dev\textures\Lib\site-packages")
 
 # import 3rd party modules
 from PIL import Image
