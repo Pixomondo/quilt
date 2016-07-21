@@ -183,8 +183,7 @@ def cli(src, **kwargs):
                        for i in xrange(len(src))]
 
     # derive the temp path to pass to Quilt
-    kwargs['result_path'] = path_form[1].format('_temp')
-
+    kwargs['result_path'] = path_form.format('_temp')
     launch_quilt(result_path, src_matrices, **kwargs)
 
 
