@@ -6,9 +6,3 @@
 
 # Vim / Notepad++ temp files
 *~
-
-# images input and outputs
-data/
-results/
-src/old
-src/testing
