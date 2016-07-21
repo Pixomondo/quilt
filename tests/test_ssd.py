@@ -59,7 +59,7 @@ class TestSsd(unittest.TestCase):
             [39924, 65634, 117603, 107241, 64518, 19974, 20859, 42828],
             [44616, 78948, 120759, 101124, 56973, 20616, 26373, 42684]])
 
-        result = np.floor(ssd.ssd(x, y))
+        result = np.floor(ssd.ssd(self.img3, self.patch3))
         self.assertEqual(expected.shape, result.shape)
         np.testing.assert_array_equal(expected, result)
 

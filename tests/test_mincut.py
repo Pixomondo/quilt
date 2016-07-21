@@ -89,5 +89,3 @@ class TestMinCut(unittest.TestCase):
         self.assertEqual(expected.shape, result.shape)
         np.testing.assert_array_equal(expected, result)
 
-if __name__ == '__main__':
-    unittest.main()
