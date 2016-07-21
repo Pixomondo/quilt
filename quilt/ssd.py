@@ -10,12 +10,21 @@ from numpy.lib.stride_tricks import as_strided
 
 def ssd(img, patch):
     result = 0
-    for k in range(0, img.shape[2]):
-        result = result + sumsqdiff3(img[:, :, k], patch[:, :, k])
+
+    # just one channel
+    if len(img.shape) == 2 and len(patch.shape) == 2:
+        result = result + sumsqdiff(img, patch)
+    elif len(img.shape) > 2 and len(patch.shape) > 2:
+        for k in range(0, img.shape[2]):
+            result = result + sumsqdiff(img[:, :, k], patch[:, :, k])
+    else:
+        raise ValueError('Unresistant number of channels. Got img size = {0} '
+                         'and patch size = {1}'.format(img.shape, patch.shape))
+
     return result
 
 
-def sumsqdiff3(img, patch):
+def sumsqdiff(img, patch):
     """
     We want to calculate the difference between patch and img.
     So we want a matrix M where:
