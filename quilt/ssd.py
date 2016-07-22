@@ -1,5 +1,7 @@
 #! /usr/bin/env python
-
+"""
+Sum Square Difference calculator
+"""
 # import builtin modules
 from __future__ import division
 

@@ -15,9 +15,6 @@ from __future__ import division
 from copy import deepcopy
 from multiprocessing import cpu_count, Queue, Pool, JoinableQueue
 import time
-import sys
-import os
-sys.path.insert(0, r"C:\dev\textures\Lib\site-packages")
 
 # import 3rd party modules
 import numpy as np

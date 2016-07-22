@@ -6,13 +6,11 @@ Quilt command line interface
 # import builtin modules
 from __future__ import division
 import time
-import sys
 import os
-from os.path import split, splitext, join, isdir, isfile
+from os.path import split, splitext, join, isdir
 from pprint import pprint
 import glob
 from multiprocessing import cpu_count
-sys.path.insert(0, r"C:\dev\textures\Lib\site-packages")
 
 # import 3rd party modules
 from PIL import Image
@@ -185,8 +183,7 @@ def cli(src, **kwargs):
                        for i in xrange(len(src))]
 
     # derive the temp path to pass to Quilt
-    kwargs['result_path'] = path_form[1].format('_temp')
-
+    kwargs['result_path'] = path_form.format('_temp')
     launch_quilt(result_path, src_matrices, **kwargs)
 
 

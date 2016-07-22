@@ -1,3 +1,8 @@
+#! /usr/bin/env python
+"""
+Minimum cut finder
+"""
+
 # import 3rd party modules
 from numpy import transpose, ones, any, uint8
 from maxflow import Graph
