@@ -52,6 +52,7 @@ def imresize(img, size=[0, 0], height=None, width=None, scale=None):
     Returns: resized image
     """
     # if it is a matrix: turn it into image first
+    img = deepcopy(img)
     is_matrix = isinstance(img, np.ndarray)
     if is_matrix:
         img = matrix2img(img)
@@ -61,12 +62,12 @@ def imresize(img, size=[0, 0], height=None, width=None, scale=None):
 
     # find the scale value if only on dimension is given
     if height and not width:
-        scale = (height / float(img.shape[1]))
+        scale = (height / float(img.size[1]))
     if width and not height:
-        scale = (width / float(img.shape[0]))
+        scale = (width / float(img.size[0]))
 
-    h = size[0] or int(float(img.size[1]) * float(scale))
-    w = size[1] or int(float(img.size[0]) * float(scale))
+    h = height or size[0] or int(float(img.size[1]) * float(scale))
+    w = width or size[1] or int(float(img.size[0]) * float(scale))
     result = img.resize((w, h), Image.ANTIALIAS)
 
     return img2matrix(result) if is_matrix else result
@@ -76,7 +77,9 @@ def img2matrix(img):
     """
     Converts the input image into a matrix of float values in the range [0, 1].
     """
-    matrix = np.asarray(img).astype(np.float)
+    if isinstance(img, np.ndarray):
+        return img
+    matrix = np.asarray(img)
     matrix = im2double(matrix)
     return matrix
 
@@ -85,9 +88,16 @@ def matrix2img(matrix, adjust_values=True):
     """
     Converts an image into a matrix.
     """
+    if isinstance(matrix, Image.Image):
+        return matrix
+    matrix = deepcopy(matrix)
+
+    # values
     if adjust_values and np.max(matrix) <= 1:
         matrix *= 255
     matrix = np.uint8(matrix)
+
+    # convert
     if len(matrix.shape) == 3 and matrix.shape[2] == 3:
         return Image.fromarray(matrix, 'RGB')
     return Image.fromarray(matrix)
@@ -153,25 +163,27 @@ def show(img):
     Display image. Can display multiple images.
     Args:
         img: image (or list of images) to display
-        title: title of the image/s
     """
     if not isinstance(img, list):
         img = [img]
     for i in img:
-        im = deepcopy(i)
-        if im.dtype == np.dtype('uint8'):
-            # clamp values to [0, 255]
-            im[im > 255] = 255
-            im[im < 0] = 0
-            matrix2img(im).show()
-        elif im.dtype == np.dtype('float64'):
-            # clamp values to [0, 1]
-            im[im > 1] = 1
-            im[im < 0] = 0
-            matrix2img(im).show()
+        if isinstance(i, Image.Image):
+            i.show()
         else:
-            raise ValueError("show: unsupported image type: found {0}".format(
-                             im.dtype))
+            im = deepcopy(i)
+            if im.dtype == np.dtype('uint8'):
+                # clamp values to [0, 255]
+                im[im > 255] = 255
+                im[im < 0] = 0
+                matrix2img(im).show()
+            elif im.dtype == np.dtype('float64'):
+                # clamp values to [0, 1]
+                im[im > 1] = 1
+                im[im < 0] = 0
+                matrix2img(im).show()
+            else:
+                raise ValueError("show: unsupported image type: found {0}".
+                                 format(im.dtype))
 
 
 def save(img, path):
@@ -193,12 +205,15 @@ def save(img, path):
 
     # save it
     for idx, image in enumerate(img):
-        im = deepcopy(image)
-        print 'saving', path[idx]
-        if im.dtype == np.dtype('uint8'):
-            matrix2img(im).save(path[idx])
-        elif im.dtype == np.dtype('float64'):
-            matrix2img(im).save(path[idx])
+        if isinstance(image, Image.Image):
+            image.save(path[idx])
         else:
-            raise ValueError("show: unsupported image type: found {0}".format(
-                             im.dtype))
+            im = deepcopy(image)
+            print 'saving', path[idx]
+            if im.dtype == np.dtype('uint8'):
+                matrix2img(im).save(path[idx])
+            elif im.dtype == np.dtype('float64'):
+                matrix2img(im).save(path[idx])
+            else:
+                raise ValueError("show: unsupported image type: found {0}".
+                                 format(im.dtype))

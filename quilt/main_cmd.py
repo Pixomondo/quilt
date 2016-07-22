@@ -126,7 +126,9 @@ def set_src_path(ctx, _, path):
     default=False,
     help='Enable/Disable debug messages and image display')
 def cli(src, **kwargs):
-
+    """
+    Parses the arguments for quilt processing.
+    """
     pprint(src)
     pprint(kwargs)
 
@@ -184,11 +186,13 @@ def cli(src, **kwargs):
 
     # derive the temp path to pass to Quilt
     kwargs['result_path'] = path_form.format('_temp')
-    launch_quilt(result_path, src_matrices, **kwargs)
+    _launch_quilt(result_path, src_matrices, **kwargs)
 
 
-def launch_quilt(final_path, src, **kwargs):
-    print kwargs['debug']
+def _launch_quilt(final_path, src, **kwargs):
+    """
+    Launches quilt process with the parsed arguments.
+    """
 
     multi_proc = kwargs.pop('multiprocess')
     debug = kwargs.pop('debug')
