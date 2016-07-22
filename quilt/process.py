@@ -40,57 +40,60 @@ class Quilt:
     def __init__(self, X, output_size=None,
                  input_mask=None, cut_mask=None,
                  tilesize=30, overlap=10, big_tilesize=500, big_overlap=200,
-                 rotations=0, flip=[0, 0],
+                 rotations=0, flip=(0, 0),
                  error=0.002, constraint_start=False, cores=None,
                  result_path=None, niter=1):
         """
         Initialize Quilt class. Sets all the necessary parameters.
 
         Args:
-            X: source image. Can be a list of images, where the first one is the
-               master one (e.g. [color, bump, spec]). The result will be a stack
-               with the same number of images.
-            Y: destination image.
-               ASSUMED NONE
+            X: source image.
+               Can be a list of images, where the first one is the master one.
+               E.g. [color, bump, spec]. The result will be a stack with the
+               same number of images.
 
-            input_mask: black and white image to mask region of the source one you
-                   don't want to appear in the output.
+            output_size: [height, width] desired size of the output image.
+
+            input_mask: black and white image to mask the regions which not
+                    wanted to appear in the output.
                       - white: remove
                       - black: pass
                    If present must have the same size of X.
-            cut_mask: black and white image to describe the shape of dest image.
+            cut_mask: black and white image to describe the shape of the output
+                      image.
                       - white: to be filled with texture
                       - black: remains empty
-                   TO BE IMPLEMENTED
 
-            rotations: number of rotations of 90 degrees to apply to the source
-                       texture in order to increase the variety of patches.
-
-            tilesize: size of the tile used to perform the computation.
+            tilesize: size of the tiles used to perform the computation.
             overlap: size of the overlap.
                      If present, has to be < tilesize. Default: tilesize / 5.
-            num_tiles: numbers of tiles the destination image (Y) will be
-                       composed of.
-                       If not present, Y's size will be learned from Ymask.
-            big_tilesize: size of the tiles to use in the first process. Each
-                          of the child processes will compute quilting in one
-                          of the big tiles.
+            big_tilesize: size of the tiles to use in the multiprocess
+                          computation: used in the first process to divide the
+                          image in big tiles, each of which is the assigned to
+                          a different process.
+                          Relevant only if optimized_compute is called.
             big_overlap: size of the overlap associated to the big tile.
                          If present, must be < big_tilesize.
                          Default: big_tilesize / 3.
+                         Relevant only if optimized_compute is called.
 
-            err: amount to error accepted when selecting the best matching
-                 patches.
+            rotations: number of rotations of 90 degrees to apply to the source
+                       texture in order to increase the variety of patches.
+                       Accepted values: 0, 2, 4.
+            flip: tuple of two booleans indicating the flip to apply to the
+                  source texture in order to increase the variety of patches.
+                  In the form: (flip_vertical, flip_horizontal)
+
+            error: amount of error accepted when selecting the best matching
+                   patches.
             result_path: path for the temporary results.
             constraint_start: flag to define a constraint on the first patch
                               (top left corner) of the dst image:
                                - False: random
                                - True: pick the first patch of the src image
             cores: number of available cores
-
-        in the future...
-            mirror
-            niter
+            niter: number of iterations to perform in the single process
+                   computation. Relevant only if compute is called.
         """
 
         # tile size and overlap
@@ -102,7 +105,6 @@ class Quilt:
 
         # ------ images ------
         # src
-        flip = self.val2tuple(flip)
         print 'rot:', rotations
         print 'flip:', flip
         X, self.X = self._set_src(X, rotate=rotations, flip=flip)
@@ -122,7 +124,7 @@ class Quilt:
         print 'num tiles:', self.num_tiles
         self.Y = self._set_dst(output_size)
         print 'Y: len:', len(self.Y), '- dim:', self.Y[0].shape
-        self.Ymask = self._set_dst_mask(cut_mask, output_size)
+        self.Ymask = self._set_cut_mask(cut_mask, output_size)
 
         # ----- big tiles -------------------
         if big_overlap >= big_tilesize:
@@ -130,7 +132,8 @@ class Quilt:
         self.big_tilesize = min(long(big_tilesize), min(X.shape[0:2]) - 1)
         self.big_overlap = min(big_overlap, int(self.big_tilesize / 3))
         self.Xmask_big = self._set_src_mask(input_mask, self.big_tilesize,
-                                       reference=X, rotate=rotations, flip=flip)
+                                            reference=X,
+                                            rotate=rotations, flip=flip)
         print 'Big overlap:', self.big_overlap, 'tile size:', self.big_tilesize
 
         # ------ independent parameters ------
@@ -185,7 +188,8 @@ class Quilt:
 
         return reference, img
 
-    def _set_src_mask(self, mask, tilesize, reference=None, rotate=0, flip=None):
+    def _set_src_mask(self, mask, tilesize, reference=None,
+                      rotate=0, flip=(0, 0)):
         """
         Manages the mask of the source image (if present):
             - checks the mask has the same size of the source image
@@ -200,19 +204,18 @@ class Quilt:
             mask: input mask
             reference: master source image without rotation
             rotate: number of 90 degrees rotations to be applied to the mask
-            flip: list of two flag controlling flip transformations
+            flip: tuple of two flag controlling flip transformations
 
         Returns:
             mask
         """
         # no mask
         if mask is None:
-            if rotate or flip:
-                # create the mask to remove the lines between the rotations
-                mask = ones(reference.shape[0:2])
-            else:
+            if not rotate and flip == (0, 0):
                 print 'Xmask: None'
                 return
+            # create the mask to remove the lines between the rotations
+            mask = ones(reference.shape[0:2])
 
         # coherent with reference
         if reference is None:
@@ -243,7 +246,7 @@ class Quilt:
 
         # change overlap?
         for i in xrange(mask.shape[0] - self.overlap + 1):
-            for j in xrange(mask.shape[1] - self.overlap + 1 ):
+            for j in xrange(mask.shape[1] - self.overlap + 1):
                 # get the tile starting from the pixel
                 tile = mask[i:i + tilesize, j:j + tilesize]
                 # if it contains a masked value: also the pixel generating the
@@ -272,9 +275,9 @@ class Quilt:
         res = [deepcopy(img) for _ in xrange(len(self.X))]
         return res
 
-    def _set_dst_mask(self, mask, size):
+    def _set_cut_mask(self, mask, size):
         """
-        Manages the mask for the destination image, if present.
+        Manages the cut mask for the destination image, if present.
          The mask is turned into a binary image of the same size of the
          destination image.
 
@@ -370,7 +373,7 @@ class Quilt:
         return rot
 
     @classmethod
-    def create_flip(cls, img, amount):
+    def create_flip(cls, img, amount=(0, 0)):
         """
         Generates the required rotations of the input image and builds an image
         containing the input image and its rotations (the remaining space is
@@ -396,9 +399,8 @@ class Quilt:
             image composed of the input one and it rotations
         """
         # check the amount
-        if not amount or amount == [0, 0]:
+        if not amount or amount == (0, 0):
             return img
-        amount = [bool(i) for i in amount]
 
         # turn the input image into a 3-channel image
         third_dim = len(img.shape) == 3
@@ -476,7 +478,9 @@ class Quilt:
         return self.Y
 
     def compute(self):
-
+        """
+        Single, traditional, single process computation.
+        """
         print '\nCOMPUTING ...'
 
         for n in xrange(self.niter):
@@ -496,6 +500,7 @@ class Quilt:
                     if sizeJ <= self.overlap:
                         continue
 
+                    # skip if this patch is not meant to be filled
                     if self.Ymask and not np.any(self.Ymask[startI:endI,
                                                             startJ:endJ]):
                         continue
