@@ -48,7 +48,7 @@ class TestConstructor(unittest.TestCase):
         Test the the source images are edited consistently and a same number of
         destination images is prepared.
         """
-        q = Quilt([self.x, self.x, self.x], output_size=[30, 20])
+        q = Quilt([self.x, self.x, self.x], output_size=(30, 20))
 
         # there are 3 images in the stacks
         expected_x = gray2rgb(im2double(self.x))
@@ -87,7 +87,7 @@ class TestConstructor(unittest.TestCase):
         Test the destination image initializes as a zeros matrix of the required
         size. Test the cut_mask is also resized.
         """
-        q = Quilt(self.x, output_size=[100, 200], cut_mask=zeros((100, 300)))
+        q = Quilt(self.x, output_size=(100, 200), cut_mask=zeros((100, 300)))
 
         # one layer in the stack
         self.assertEqual(1, len(q.Y))
@@ -97,8 +97,6 @@ class TestConstructor(unittest.TestCase):
         expected = zeros((100, 200, 3))
         assert_array_equal(expected, q.Y[0])
         expected = zeros((100, 200))
-        print 'shape:', q.Ymask.shape
-        print 'value:', np.unique(q.Ymask)
         assert_array_equal(expected, q.Ymask)
 
     def test_dst_img_mask(self):
@@ -143,13 +141,6 @@ class TestConstructor(unittest.TestCase):
         expected = int(q.big_tilesize/3)
         self.assertEqual(expected, q.big_overlap)
 
-    # def test_cores(self):
-    #     """
-    #     Test the number of cores is the required one or the number of available
-    #     cores minus 2.
-    #     """
-    #     q = Quilt(self.x, output_size=self.x.shape, )
-
 
 class TestImages(unittest.TestCase):
 
@@ -170,8 +161,8 @@ class TestImages(unittest.TestCase):
         # load images
         _size = (60, 60)
         cls.src = [img2matrix(Image.open(p)) for p in glob(cls.src_paths)]
-        cls.src = [imresize(s, _size) for s in cls.src]
-        cls.imask = img2matrix(imresize(Image.open(cls.imask_path), _size))
+        cls.src = [imresize(s, *_size) for s in cls.src]
+        cls.imask = img2matrix(imresize(Image.open(cls.imask_path), *_size))
         cls.cmask = img2matrix(Image.open(cls.cmask_path))
         cls.result = os.path.join(cls.temp_folder, 'result.png')
 
@@ -180,11 +171,10 @@ class TestImages(unittest.TestCase):
         cls.q = Quilt(cls.src, output_size=cls.dst_size,
                       input_mask=cls.imask, cut_mask=cls.cmask,
                       tilesize=10, overlap=3, big_tilesize=20, big_overlap=5,
-                      rotations=0, flip=[0, 0],
-                      error=0.02, constraint_start=True, cores=None,
+                      rotations=0, flip=(0, 0),
+                      error=0.02, constraint_start=True, cores=1,
                       result_path=cls.result)
-        cls.q.debug = False
-        cls.q.optimized_compute()
+        cls.q.compute()
         cls.results = cls.q.get_result()
 
     @classmethod
@@ -234,7 +224,7 @@ class TestImages(unittest.TestCase):
         output.
         """
         result = self.results[0]
-        cmask = imresize(self.cmask, self.dst_size)
+        cmask = imresize(self.cmask, *self.dst_size)
         result[cmask > 0] = 0
         assert_array_equal([0], np.unique(result))
 
@@ -273,9 +263,8 @@ class TestMatrices(unittest.TestCase):
                             .5  P .5                    *  P  *
                             .5 .5  1                    *  * .5
         """
-        q = Quilt(self.eye, output_size=[10, 10], tilesize=4, overlap=2,
+        q = Quilt(self.eye, output_size=(10, 10), tilesize=4, overlap=2,
                   error=0, constraint_start=True)
-        q.debug = False
         q.compute()
         result = q.get_result()[0]
 
@@ -306,9 +295,8 @@ class TestMatrices(unittest.TestCase):
         Test the final result is still a chessboard matrix with tiles of the
         same size as the ones in the input.
         """
-        q = Quilt(np.float64(self.chessboard), output_size=[16, 16], tilesize=4,
+        q = Quilt(np.float64(self.chessboard), output_size=(16, 16), tilesize=4,
                   overlap=2, error=0, constraint_start=True)
-        q.debug = False
         q.compute()
         result = q.get_result()[0]
 
@@ -327,16 +315,16 @@ class TestMatrices(unittest.TestCase):
                 patch = result[i:i+4, j:j+4]
                 assert_array_equal(expected, patch)
 
+    @unittest.skip("Cython not working with multiprocessing")
     def test_chessboard_multiproc(self):
         """
         Test optimized_compute method on the chessboard matrix.
         Test the final result is still a chessboard matrix with tiles of the
         same size as the ones in the input.
         """
-        q = Quilt(np.float64(self.chessboard), output_size=[16, 16], tilesize=4,
+        q = Quilt(np.float64(self.chessboard), output_size=(16, 16), tilesize=4,
                   overlap=2, error=0, big_tilesize=8, big_overlap=3,
                   constraint_start=True)
-        q.debug = False
         q.optimized_compute()
         result = q.get_result()[0]
 
@@ -360,7 +348,6 @@ class TestMethods(unittest.TestCase):
     a = np.asarray([[0, 1, 2, 3],
                     [5, 6, 7, 8],
                     [4, 9, 2, 3]])
-    Quilt.debug = False
 
     def test_rotation2(self):
         """
@@ -416,7 +403,7 @@ class TestMethods(unittest.TestCase):
         """
         Test create_flip with vertical flipping.
         """
-        result = Quilt.create_flip(self.a, [1, 0])
+        result = Quilt.create_flip(self.a, (1, 0))
         expected = np.asarray([[0, 1, 2, 3],
                                [5, 6, 7, 8],
                                [4, 9, 2, 3],
@@ -430,7 +417,7 @@ class TestMethods(unittest.TestCase):
         """
         Test create_flip with horizontal flipping.
         """
-        result = Quilt.create_flip(self.a, [0, 1])
+        result = Quilt.create_flip(self.a, (0, 1))
         expected = np.asarray([[0, 1, 2, 3, 0, 3, 2, 1, 0],
                                [5, 6, 7, 8, 0, 8, 7, 6, 5],
                                [4, 9, 2, 3, 0, 3, 2, 9, 4]])
@@ -440,7 +427,7 @@ class TestMethods(unittest.TestCase):
         """
         Test create_flip with both the flip dimensions activated.
         """
-        result = Quilt.create_flip(self.a, [1, 1])
+        result = Quilt.create_flip(self.a, (1, 1))
         expected = np.asarray([[0, 1, 2, 3, 0, 3, 2, 1, 0],
                                [5, 6, 7, 8, 0, 8, 7, 6, 5],
                                [4, 9, 2, 3, 0, 3, 2, 9, 4],
@@ -480,8 +467,9 @@ class TestMethods(unittest.TestCase):
                           [23, 22, 44]])
         patch = im2double(np.uint8(gray2rgb(patch)))
 
-        q = Quilt(img, output_size=[20, 20])
-        result = q.distance(patch, tilesize=3, overlap=2, coord=[1, 1])
+        q = Quilt(img, output_size=(20, 20))
+        q.tilesize = 3
+        result = q.distance(patch, overlap=2, coord=(1, 1))
         expected = zeros((5, 6))
         self.assertEqual(expected.shape, result.shape)
 
@@ -505,8 +493,9 @@ class TestMethods(unittest.TestCase):
         patch = im2double(gray2rgb(patch))
 
         # compute distance
-        q = Quilt(img, output_size=[20, 20])
-        distances = q.distance(patch, tilesize=4, overlap=2, coord=[2, 2])
+        q = Quilt(img, output_size=(20, 20))
+        q.tilesize = 4
+        distances = q.distance(patch, overlap=2, coord=(2, 2))
         best = np.min(distances)
         candidates = np.where(distances <= best)
 

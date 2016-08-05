@@ -22,12 +22,12 @@ class TestUtils(unittest.TestCase):
         a = np.array([[30, 39, 48,  1],
                       [38, 47,  7,  9],
                       [46,  6,  8, 17],
-                      [5,  14, 16, 25]])
+                      [5,  14, 16, 25]], dtype=np.float)
         a = gray2rgb(a)
         b = np.array([[9,  18, 27, 29],
                       [17, 26, 35, 37],
                       [25, 34, 36, 45],
-                      [33, 42, 44, 4]])
+                      [33, 42, 44, 4]], dtype=np.float)
         b = gray2rgb(b)
         m = np.array([[0, 0, 1, 1],
                       [0, 1, 1, 1],
@@ -37,7 +37,7 @@ class TestUtils(unittest.TestCase):
         expected = np.asarray([[9,  18, 48,  1],
                                [17, 47,  7,  9],
                                [46,  6,  8, 17],
-                               [33, 42, 44, 25]])
+                               [33, 42, 44, 25]], dtype=np.float)
         expected = gray2rgb(expected)
 
         # size

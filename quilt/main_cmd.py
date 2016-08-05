@@ -145,7 +145,7 @@ def cli(src, **kwargs):
     kwargs.pop('input_scale')
     hgt = kwargs.pop('output_height') or src_matrices[0].shape[0]
     wdt = kwargs.pop('output_width') or src_matrices[0].shape[1]
-    kwargs['output_size'] = [hgt, wdt]
+    kwargs['output_size'] = (hgt, wdt)
 
     # destination paths
     dst = kwargs.pop('destination')
@@ -191,7 +191,7 @@ def launch_quilt(final_path, src, **kwargs):
     print kwargs['debug']
 
     multi_proc = kwargs.pop('multiprocess')
-    debug = kwargs.pop('debug')
+    debug = kwargs['debug']
 
     # ------------- quilt --------------
 
@@ -200,7 +200,6 @@ def launch_quilt(final_path, src, **kwargs):
 
     # compute quilting
 
-    Quilt.debug = debug
     q = Quilt(src, **kwargs)
     if multi_proc:
         q.optimized_compute()

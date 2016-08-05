@@ -6,3 +6,7 @@
 
 # Vim / Notepad++ temp files
 *~
+
+# cython compiled files
+*.pyd
+*.c

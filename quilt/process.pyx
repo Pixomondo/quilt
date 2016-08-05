@@ -8,6 +8,7 @@ Inputs
   num_tiles:  The number of tiles to be placed in the output image, in each dimension
   overlap: The amount of overlap to allow between pixels (def: 1/6 tilesize)
   err: used when computing list of compatible tiles (def: 0.1)
+
 """
 
 # import builtin modules
@@ -17,10 +18,16 @@ from multiprocessing import cpu_count, Queue, Pool, JoinableQueue
 import time
 
 # import 3rd party modules
+cimport cython
 import numpy as np
-from numpy import power, ceil, multiply, where, rot90, inf, zeros, ones
+cimport numpy as np
+from numpy import power, multiply, where, rot90, inf, zeros, ones
 from numpy import fliplr, flipud
-from numpy.random import rand
+from numpy cimport ndarray, float_t
+from cpython cimport bool
+# c libraries
+from libc.math cimport ceil
+from libc.stdlib cimport rand, RAND_MAX
 
 # import internal modules
 from ssd import ssd
@@ -33,25 +40,34 @@ def unwrap_self(*arg, **kwarg):
     return Quilt.optimized_compute_small(*arg, **kwarg)
 
 
-class Quilt:
+cdef class Quilt:
 
-    debug = True
+    # cython attributes declaration
+    cdef public bool debug
+    cdef public list X, Y
+    cdef public ndarray Xmask, Ymask, Xmask_big
+    cdef public int tilesize, overlap, big_tilesize, big_overlap
+    cdef public int rotations, cores, niter
+    cdef public list num_tiles
+    cdef public tuple flip
+    cdef public float err
+    cdef public bool constraint_start, preview
+    cdef public basestring result_path
 
-    def __init__(self, X, output_size=None,
-                 input_mask=None, cut_mask=None,
-                 tilesize=30, overlap=10, big_tilesize=500, big_overlap=200,
-                 rotations=0, flip=[0, 0],
-                 error=0.002, constraint_start=False, cores=None,
-                 result_path=None, niter=1):
+    @cython.cdivision(True)
+    def __init__(Quilt self, src, tuple output_size=(0, 0),
+                 ndarray input_mask=None, ndarray cut_mask=None,
+                 int tilesize=30, int overlap=10, int big_tilesize=500,
+                 int big_overlap=200, int rotations=0, tuple flip=(0, 0),
+                 float error=0.002, bool constraint_start=False, int cores=0,
+                 basestring result_path=None, int niter=1, bool debug=False):
         """
         Initialize Quilt class. Sets all the necessary parameters.
 
         Args:
-            X: source image. Can be a list of images, where the first one is the
+            src: source image. Can be a list of images, where the first one is the
                master one (e.g. [color, bump, spec]). The result will be a stack
                with the same number of images.
-            Y: destination image.
-               ASSUMED NONE
 
             input_mask: black and white image to mask region of the source one you
                    don't want to appear in the output.
@@ -69,9 +85,6 @@ class Quilt:
             tilesize: size of the tile used to perform the computation.
             overlap: size of the overlap.
                      If present, has to be < tilesize. Default: tilesize / 5.
-            num_tiles: numbers of tiles the destination image (Y) will be
-                       composed of.
-                       If not present, Y's size will be learned from Ymask.
             big_tilesize: size of the tiles to use in the first process. Each
                           of the child processes will compute quilting in one
                           of the big tiles.
@@ -79,8 +92,8 @@ class Quilt:
                          If present, must be < big_tilesize.
                          Default: big_tilesize / 3.
 
-            err: amount to error accepted when selecting the best matching
-                 patches.
+            error: amount to error accepted when selecting the best matching
+                   patches.
             result_path: path for the temporary results.
             constraint_start: flag to define a constraint on the first patch
                               (top left corner) of the dst image:
@@ -92,30 +105,33 @@ class Quilt:
             mirror
             niter
         """
+        self.debug = debug
 
         # tile size and overlap
         if overlap >= tilesize:
             raise ValueError('Overlap must be less than the tile size')
-        self.tilesize = long(tilesize)
+        self.tilesize = tilesize
+        print 'init tile', self.tilesize, tilesize
         self.overlap = overlap or int(round(self.tilesize / 5))
         print 'overlap:', overlap, 'tile size:', self.tilesize
 
         # ------ images ------
         # src
-        flip = self.val2tuple(flip)
+        flip = flip
         print 'rot:', rotations
         print 'flip:', flip
-        X, self.X = self._set_src(X, rotate=rotations, flip=flip)
-        print 'X: len:', len(X), '- dim:', self.X[0].shape
-        self.Xmask = self._set_src_mask(input_mask, self.tilesize, reference=X,
+        src, self.X = self._set_src(src, rotate=rotations, flip=flip)
+        print 'X: len:', len(src), '- dim:', self.X[0].shape
+        self.Xmask = self._set_src_mask(input_mask, self.tilesize, reference=src,
                                         rotate=rotations, flip=flip)
-        print 'Xmask:', self.Xmask is None and 'None' or self.Xmask.shape
+        print 'Xmask:', self.Xmask is None and 'None' or \
+                        (self.Xmask.shape[0], self.Xmask.shape[1])
 
         # dst
-        if output_size:
-            output_size = output_size or 2 * X.shape[0:2]
+        if not output_size == (0, 0):
+            output_size = output_size or 2 * [src.shape[0], src.shape[1]]
         elif cut_mask is not None:
-            output_size = [cut_mask.shape[0], cut_mask.shape[1]]
+            output_size = (cut_mask.shape[0], cut_mask.shape[1])
         else:
             raise ValueError("Please provide the output_size or cut_mask")
         self.num_tiles = self.calc_num_tiles(output_size)
@@ -127,10 +143,10 @@ class Quilt:
         # ----- big tiles -------------------
         if big_overlap >= big_tilesize:
             raise ValueError('Overlap must be less than the tile size')
-        self.big_tilesize = min(long(big_tilesize), min(X.shape[0:2]) - 1)
+        self.big_tilesize = min(long(big_tilesize), min(src.shape[0:2]) - 1)
         self.big_overlap = min(big_overlap, int(self.big_tilesize / 3))
         self.Xmask_big = self._set_src_mask(input_mask, self.big_tilesize,
-                                       reference=X, rotate=rotations, flip=flip)
+                                       reference=src, rotate=rotations, flip=flip)
         print 'Big overlap:', self.big_overlap, 'tile size:', self.big_tilesize
 
         # ------ independent parameters ------
@@ -145,7 +161,12 @@ class Quilt:
         self.preview = False
         self.niter = niter
 
-    def _set_src(self, img, rotate=0, flip=None):
+    def set_debug(Quilt self, bool value):
+        self.debug = value
+
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cdef tuple _set_src(Quilt self, img, int rotate=0, tuple flip=(0, 0)):
         """
         Manages source image/s:
             - turns it into a stack of images of the same size
@@ -162,30 +183,37 @@ class Quilt:
             - reference image (the first image of the stack with no rotations)
             - stack of the source images
         """
+
+        # cython variables declaration
+        cdef int i
+        cdef ndarray[float_t, ndim=3] reference, s
+        cdef list stack
+
         # stack of images
-        if not isinstance(img, list):
-            img = [img]
+        stack = img if isinstance(img, list) else [img]
 
-        reference = None
-        for i in xrange(len(img)):
+        for i in xrange(len(stack)):
             # images in the stack must have the same size
-            if i and not img[i].shape[0:2] == img[0].shape[0:2]:
+            if i and not stack[i].shape[0:2] == stack[0].shape[0:2]:
                 raise ValueError('Chained images must have the same size. Got '
-                                 '{0} and {1}'.format(img[i].shape[0:2],
-                                                      img[0].shape[0:2]))
+                                 '{0} and {1}'.format(stack[i].shape[0:2],
+                                                      stack[0].shape[0:2]))
             # 3 channel images
-            img[i] = gray2rgb(img[i])
+            stack[i] = gray2rgb(stack[i])
             # float values in range [0, 1]
-            img[i] = im2double(img[i])
+            stack[i] = im2double(stack[i])
             if not i:
-                reference = img[i]
+                reference = stack[i]
         # rotation
-        img = [self.create_rotations(i, rotate) for i in img]
-        img = [self.create_flip(i, flip) for i in img]
+        stack = [self.create_rotations(s, rotate) for s in stack]
+        stack = [self.create_flip(s, flip) for s in stack]
 
-        return reference, img
+        return reference, stack
 
-    def _set_src_mask(self, mask, tilesize, reference=None, rotate=0, flip=None):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cdef ndarray _set_src_mask(Quilt self, ndarray mask, int tilesize,
+                      ndarray reference=None, int rotate=0, tuple flip=(0, 0)):
         """
         Manages the mask of the source image (if present):
             - checks the mask has the same size of the source image
@@ -205,11 +233,15 @@ class Quilt:
         Returns:
             mask
         """
+
+        # cython variables declaration
+        cdef int i, j
+
         # no mask
         if mask is None:
             if rotate or flip:
                 # create the mask to remove the lines between the rotations
-                mask = ones(reference.shape[0:2])
+                mask = ones((reference.shape[0], reference.shape[1]))
             else:
                 print 'Xmask: None'
                 return
@@ -217,10 +249,11 @@ class Quilt:
         # coherent with reference
         if reference is None:
             reference = self.X
-        if not mask.shape[0:2] == reference.shape[0:2]:
+        if not mask.shape[0] == reference.shape[0] or not  \
+            mask.shape[1] == reference.shape[1]:
             raise ValueError('X and Xmask cannot have different sizes:'
-                             'X={0} Xmask={1}'.format(reference.shape,
-                                                      mask.shape))
+               'X=({0}, {1}) Xmask=({2}, {3})'.format(reference.shape[0],
+                reference.shape[0], mask.shape[0], mask.shape[1]))
         # one channel image
         mask = rgb2gray(mask)
 
@@ -251,10 +284,12 @@ class Quilt:
                 if np.any(tile == inf):
                     mask[i, j] = inf
 
-        print 'Xmask:', mask.shape, ', values:', np.unique(mask)
+        print 'Xmask:', mask.shape[0], mask.shape[1],',values:', np.unique(mask)
         return mask
 
-    def _set_dst(self, size):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cdef list _set_dst(Quilt self, tuple size):
         """
         Manages the destination image, if given.
             - if no image is given, a zero-image is created according to size
@@ -266,13 +301,21 @@ class Quilt:
         Returns:
             stack of destination images.
         """
+
+        # cython variables declaration
+        cdef ndarray[float_t, ndim=3] img
+        cdef list res
+        cdef int i
+
         # zero-value image
         img = zeros((size[0], size[1], 3))
         # stack of images
-        res = [deepcopy(img) for _ in xrange(len(self.X))]
+        res = [deepcopy(img) for i in xrange(len(self.X))]
         return res
 
-    def _set_dst_mask(self, mask, size):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cdef ndarray _set_dst_mask(Quilt self, ndarray mask, tuple size):
         """
         Manages the mask for the destination image, if present.
          The mask is turned into a binary image of the same size of the
@@ -290,23 +333,23 @@ class Quilt:
             return
 
         # 1 channel
-        if len(mask.shape) == 3:
+        if mask.ndim == 3:
             mask = rgb2gray(mask)
-        elif not len(mask.shape) == 2:
+        elif not mask.ndim == 2:
             raise ValueError('Input mask must be 2 or 3 dimensional')
 
         # resize it according to size
-        mask = im2double(imresize(mask, size=size))
+        mask = im2double(imresize(mask, *size))
 
         # binary values
         mask[mask < 0.01] = 0
         mask[mask > 0] = 1
 
-        print 'Ymask:', mask.shape
+        print 'Ymask:', mask.shape[0], mask.shape[1]
         return mask
 
     @classmethod
-    def create_rotations(cls, img, amount):
+    def create_rotations(cls, ndarray img, int amount):
         """
         Generates the required rotations of the input image and builds an image
         containing the input image and its rotations (the remaining space is
@@ -329,6 +372,10 @@ class Quilt:
         Returns:
             image composed of the input one and it rotations
         """
+        # cython variables declaration
+        cdef ndarray[float_t, ndim=3] rot
+        cdef bool third_dim
+
         # check the amount
         if not amount:
             return img
@@ -337,7 +384,7 @@ class Quilt:
                 amount))
 
         # turn the input image into a 3-channel image
-        third_dim = len(img.shape) == 3
+        third_dim = img.ndim == 3
         img = gray2rgb(img)
 
         rot = None
@@ -362,15 +409,12 @@ class Quilt:
                 rot90(img, 3)
 
         # if the input image had 1 channel only, also the result will do
-        if not third_dim:
-            rot = rot[:, :, 0]
+        img = rot if third_dim else rot[:, :, 0]
 
-        show(rot) if cls.debug else None
-
-        return rot
+        return img
 
     @classmethod
-    def create_flip(cls, img, amount):
+    def create_flip(cls, ndarray img, tuple amount):
         """
         Generates the required rotations of the input image and builds an image
         containing the input image and its rotations (the remaining space is
@@ -395,13 +439,17 @@ class Quilt:
         Returns:
             image composed of the input one and it rotations
         """
+        # cython variables declaration
+        cdef bool third_dim
+        cdef ndarray[float_t, ndim=3] flip
+
         # check the amount
-        if not amount or amount == [0, 0]:
+        if amount[0] == 0 and amount[1] == 0:
             return img
-        amount = [bool(i) for i in amount]
+        amount = tuple([bool(i) for i in amount])
 
         # turn the input image into a 3-channel image
-        third_dim = len(img.shape) == 3
+        third_dim = img.ndim == 3
         img = gray2rgb(img)
 
         # vertical
@@ -421,8 +469,6 @@ class Quilt:
         # if the input image had 1 channel only, also the result will do
         if not third_dim:
             img = img[:, :, 0]
-
-        show(img) if cls.debug else None
 
         return img
 
@@ -444,7 +490,12 @@ class Quilt:
             val = [val[0], val[0]]
         return val
 
-    def calc_num_tiles(self, img_size=None, tile_size=None, overlap=None):
+    # use C division
+    @cython.cdivision(True)
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cpdef list calc_num_tiles(Quilt self, img_size=None, int tile_size=0,
+                              int overlap=0):
         """
         Calculates the number of tiles in an image. If the resulting number is
         not int, its ceil is returned.
@@ -460,9 +511,16 @@ class Quilt:
         Returns:
             the number of tiles that fits in the image.
         """
-        img_size = img_size or self.Y[0].shape
+        # cython variables declaration
+        cdef list num_tiles
+
+        img_size = img_size or [self.Y[0].shape[0], self.Y[0].shape[1]]
         tile_size = tile_size or self.tilesize
         overlap = overlap or self.overlap
+        print 'tile = ', tile_size
+        print 'over = ', overlap
+        print 'tile = ', self.tilesize
+        print 'over = ', self.overlap
         num_tiles = [
             np.int(ceil((img_size[0] - overlap) / (tile_size - overlap))),
             np.int(ceil((img_size[1] - overlap) / (tile_size - overlap)))]
@@ -475,9 +533,17 @@ class Quilt:
         """
         return self.Y
 
-    def compute(self):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    def compute(Quilt self):
 
         print '\nCOMPUTING ...'
+
+        # cython variables declaration
+        cdef int n, i, startI, endI, sizeI, startJ, endJ, sizeJ, idx
+        cdef list y_patches, res_patches
+        cdef dict track
+        cdef ndarray[float_t, ndim=3] res
 
         for n in xrange(self.niter):
             for i in xrange(self.num_tiles[0]):
@@ -496,7 +562,7 @@ class Quilt:
                     if sizeJ <= self.overlap:
                         continue
 
-                    if self.Ymask and not np.any(self.Ymask[startI:endI,
+                    if self.Ymask is not None and not np.any(self.Ymask[startI:endI,
                                                             startJ:endJ]):
                         continue
 
@@ -508,17 +574,19 @@ class Quilt:
                     for idx, res in enumerate(res_patches):
                         self.Y[idx][startI:endI, startJ:endJ, :] = res
 
-                # if i % 5 == 0:
-                #     print 'row', i, '/', self.num_tiles[0]
-                #     if self.result_path:
-                #         save(self.Y, self.result_path)
-            # print 'iter', n, '/', self.niter
+            if self.Ymask is not None:
+                Ymask_rgb = gray2rgb(self.Ymask)
+                self.Y = [r * Ymask_rgb for r in self.Y]
+
             show(self.Y[0]) if self.debug else None
             if self.result_path:
                 save(self.Y[0], self.result_path)
 
-    def distance(self, patch, coord=None, tilesize=None, overlap=None,
-                 mask=None):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cpdef ndarray distance(Quilt self, ndarray[float_t, ndim=3] patch,
+                           tuple coord=None, list tilesize=None, int overlap=0,
+                           ndarray mask=None):
         """
         Calculates the distance between a the overlap regions of a given patch
         and the source. Considered overlaps: left and top of the patch.
@@ -540,23 +608,27 @@ class Quilt:
             and the master source image. The size of the distance matrix is
             equal to the size of the source image, minus the size of the tile.
         """
+        # cython variables declaration
+        cdef int i, j
+        cdef ndarray[float_t, ndim=2] distances, z
+        cdef list tile_size = tilesize or self.val2tuple(self.tilesize)
+
         [i, j] = coord
-        tilesize = self.val2tuple(tilesize or self.tilesize)
         overlap = overlap or self.overlap
 
-        distances = zeros((self.X[0].shape[0] - tilesize[0],
-                           self.X[0].shape[1] - tilesize[1]))
+        distances = zeros((self.X[0].shape[0] - tile_size[0],
+                           self.X[0].shape[1] - tile_size[1]))
 
         # Compute the distances from the src to the left overlap region
         if j > 0:
             distances = ssd(self.X[0], patch[:, :overlap, :])
-            distances = distances[:, 0: -tilesize[1] + overlap]
+            distances = distances[:, 0: -tile_size[1] + overlap]
 
         # Compute the distance from the source to top overlap region
         if i > 0:
 
             z = ssd(self.X[0], patch[: overlap, :, :])
-            z = z[0: -tilesize[0] + overlap, :]
+            z = z[0: -tile_size[0] + overlap, :]
             if j > 0:
                 distances = distances + z
             else:
@@ -565,7 +637,7 @@ class Quilt:
         # If both are greater, compute the distance of the overlap
         if i > 0 and j > 0:
             z = ssd(self.X[0], patch[:overlap, :overlap, :])
-            z = z[0: -tilesize[0] + overlap, 0: -tilesize[1] + overlap]
+            z = z[0: -tile_size[0] + overlap, 0: -tile_size[1] + overlap]
             distances = distances + z
 
         # if there is a mask of the source: sum it to the distance matrix. In
@@ -576,7 +648,11 @@ class Quilt:
             distances = distances+mask[:distances.shape[0], :distances.shape[1]]
         return distances
 
-    def calc_patch_mask(self, src, dst, coord=None, overlap=None):
+    # disable python bounds checking
+    @cython.boundscheck(False)
+    cdef ndarray calc_patch_mask(Quilt self, ndarray[float_t, ndim=3] src,
+                        ndarray[float_t, ndim=3] dst, tuple coord=None,
+                        int overlap=0):
         """
         Calculates the blend mask between two patches according to the min cut
         in their top and left overlapping areas.
@@ -600,6 +676,11 @@ class Quilt:
         Returns:
             blend mask: 0 where background, 1 where foreground
         """
+        # cython variables declaration
+        cdef int i, j
+        cdef ndarray[float_t, ndim=2] mask, diff
+        cdef ndarray cut
+
         [i, j] = coord
         overlap = overlap or self.overlap
 
@@ -633,12 +714,13 @@ class Quilt:
         # Write to the destination using the mask
         return mask
 
+
     # #########################################################################
     # #########################################################################
     # ################## MULTIPROCESS OPTIMIZATION ############################
     # #########################################################################
 
-    def optimized_compute(self, preview=False, tracked=None):
+    cpdef optimized_compute(Quilt self, preview=False, tracked=None):
         """
         First process: it computes the quilt algorithm with big tiles,
         manages child processes and them combines the results.
@@ -652,13 +734,20 @@ class Quilt:
          for each of the tile: process n
 
         """
+        cdef dict track, track_patch
+        cdef list big_num_tiles = self.calc_num_tiles(
+            tile_size=self.big_tilesize, overlap=self.big_overlap)
+        cdef int n_proc, i, j, startI, endI, sizeI, startJ, endJ, sizeJ
+        cdef object out_queue, in_queue
+        cdef object pool
+        cdef ndarray Ymask_rgb
+        cdef list dst_patches, res_patches,
+
+
         self.preview = preview
         track = {}
 
         print '\nMULTIPROCESSING COMPUTING ...'
-
-        big_num_tiles = self.calc_num_tiles(tile_size=self.big_tilesize,
-                                            overlap=self.big_overlap)
 
         # prepare the pool
         n_proc = min(big_num_tiles[0]*big_num_tiles[1], self.cores)
@@ -774,7 +863,7 @@ class Quilt:
 
         return track
 
-    def optimized_compute_small(self, in_queue, out_queue):
+    def optimized_compute_small(Quilt self, in_queue, out_queue):
 
         for item in iter(in_queue.get, 'STOP'):
 
@@ -825,8 +914,10 @@ class Quilt:
             print identifier, ': finished, left', in_queue.qsize()
             in_queue.task_done()
 
-    def _compute_patch(self, y_patches, tilesize, coord, mask=None,
-                       constraint_start=False, tracked=None, err=None):
+    cpdef tuple _compute_patch(Quilt self, list y_patches, list tilesize,
+                               tuple coord, ndarray mask=None, float err=0,
+                               bool constraint_start=False, list tracked=None):
+
         """
         Given a patch, calculates the resulting one.
           1) finds the best matching patch
@@ -836,11 +927,20 @@ class Quilt:
             y_patches: stack of the patch to be matched
             tilesize: patch size
             coord: tile coordinates in the destination image
-            use_mask: if to use Xmask to remove unwanted parts of the image
 
         Returns:
             Matching patch from the src image, sewed with the input one
         """
+        # cython variables declaration
+        cdef list sub, result
+        cdef tuple candidates, patch_size
+        cdef ndarray[float_t, ndim=2] distances
+        cdef float best, r
+        cdef float choice
+        cdef ndarray[float_t, ndim=3] x_patch, x, layer
+        cdef dict track
+        cdef int idx
+
 
         if tracked:
             # we already know what to choose
@@ -860,7 +960,8 @@ class Quilt:
                 candidates = where(distances <= (1 + err) * best)
 
                 # choose a random best
-                choice = ceil(rand() * (len(candidates[0]) - 1))
+                r = rand()/RAND_MAX
+                choice = ceil(r * (len(candidates[0]) - 1))
                 sub = [candidates[0][choice], candidates[1][choice]]
 
         x_patch = self.X[0][sub[0]:sub[0] + tilesize[0],
@@ -879,7 +980,8 @@ class Quilt:
 
         # sew them together
         patch_mask = self.calc_patch_mask(x_patch, y_patches[0], coord=coord)
-        result = [zeros(layer.shape) for layer in y_patches]
+        patch_size = (patch_mask.shape[0], patch_mask.shape[1])
+        result = [zeros(patch_size) for layer in y_patches]
         for idx, x in enumerate(self.X):
             x_patch = x[sub[0]:sub[0] + tilesize[0], sub[1]:sub[1]+tilesize[1]]
             result[idx] = filter_img(x_patch, y_patches[idx], patch_mask)

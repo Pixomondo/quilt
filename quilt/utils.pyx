@@ -7,8 +7,13 @@ Utility functions.
 from copy import deepcopy
 
 # import 3rd party modules
+cimport cython
 import numpy as np
+cimport numpy as np
 from numpy import multiply
+from numpy cimport ndarray, float_t
+
+from cpython cimport bool
 from PIL import Image
 
 
@@ -28,8 +33,7 @@ def filter_img(img_a, img_b, mask):
         an image with pixels from img_a (where mask = 1), and pixels from img_b
         (where mask = 0)
     """
-    if not (
-       img_a.shape[0:2] == img_b.shape[0:2] and img_a.shape[0:2] == mask.shape):
+    if not img_a.shape[0:2] == img_b.shape[0:2] == mask.shape:
         raise ValueError('Matrices dimensions mismatch: got {0}, {1} and {2}'.
                          format(img_a.shape, img_b.shape, mask.shape))
     res = np.zeros(img_a.shape)
@@ -39,12 +43,11 @@ def filter_img(img_a, img_b, mask):
     return res
 
 
-def imresize(img, size=[0, 0], height=None, width=None, scale=None):
+cpdef imresize(img,  int height=0, int width=0, float scale=0):
     """
     Resize an image based on new height and width or a scale value
     Args:
         img: image (PIL.Image)
-        size: array [width, height] containing the new sizes
         height: new desired height
         width: new desired width
         scale: scale value
@@ -52,12 +55,8 @@ def imresize(img, size=[0, 0], height=None, width=None, scale=None):
     Returns: resized image
     """
     # if it is a matrix: turn it into image first
-    is_matrix = isinstance(img, np.ndarray)
-    if is_matrix:
-        img = matrix2img(img)
-
-    if height and width:
-        size = [width, height]
+    cdef bool is_matrix = isinstance(img, np.ndarray)
+    img = matrix2img(img) if is_matrix else img
 
     # find the scale value if only on dimension is given
     if height and not width:
@@ -65,35 +64,35 @@ def imresize(img, size=[0, 0], height=None, width=None, scale=None):
     if width and not height:
         scale = (width / float(img.shape[0]))
 
-    h = size[0] or int(float(img.size[1]) * float(scale))
-    w = size[1] or int(float(img.size[0]) * float(scale))
-    result = img.resize((w, h), Image.ANTIALIAS)
-
+    height = height or int(float(img.size[1]) * float(scale))
+    width = width or int(float(img.size[0]) * float(scale))
+    result = img.resize((width, height), Image.ANTIALIAS)
     return img2matrix(result) if is_matrix else result
-
 
 def img2matrix(img):
     """
     Converts the input image into a matrix of float values in the range [0, 1].
     """
-    matrix = np.asarray(img).astype(np.float)
-    matrix = im2double(matrix)
+    if isinstance(img, np.ndarray):
+        return img
+    matrix = img.convert(img.mode)
+    matrix = np.array(matrix)
+    matrix = im2double(matrix.astype(float))
     return matrix
 
-
-def matrix2img(matrix, adjust_values=True):
+cpdef matrix2img(ndarray matrix, bool adjust_values=True):
     """
     Converts an image into a matrix.
     """
     if adjust_values and np.max(matrix) <= 1:
         matrix *= 255
     matrix = np.uint8(matrix)
-    if len(matrix.shape) == 3 and matrix.shape[2] == 3:
+    if matrix.ndim == 3 and matrix.shape[2] == 3:
         return Image.fromarray(matrix, 'RGB')
     return Image.fromarray(matrix)
 
 
-def gray2rgb(im):
+def gray2rgb(ndarray im):
     """
     Convert a gray scale image (1 channel) to RGB (3 channels)
     Args:
@@ -102,9 +101,9 @@ def gray2rgb(im):
     Returns:
         RGB image
     """
-    if len(im.shape) == 3 and im.shape[2] == 3:
+    if im.ndim == 3 and im.shape[2] == 3:
         return im
-    if len(im.shape) == 2:
+    if im.ndim == 2:
         return np.asarray(np.dstack((im, im, im)))
     raise ValueError('Input image must be 2 or 3 dimensional')
 
@@ -118,9 +117,9 @@ def rgb2gray(im):
     Returns:
         gray-scale image
     """
-    if len(im.shape) == 2:
+    if im.ndim == 2:
         return im
-    if len(im.shape) == 3 and im.shape[2] == 3:
+    if im.ndim == 3 and im.shape[2] == 3:
         r, g, b = im[:, :, 0], im[:, :, 1], im[:, :, 2]
         gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
         if im.dtype is np.dtype('uint8'):
@@ -129,7 +128,7 @@ def rgb2gray(im):
     raise ValueError('Input mask must be 2 or 3 dimensional')
 
 
-def im2double(im):
+cpdef ndarray im2double(ndarray im):
     """
     Convert an uint8 image to float.
     Args:

@@ -2,31 +2,36 @@
 """
 Sum Square Difference calculator
 """
-# import builtin modules
-from __future__ import division
 
 # import 3rd party modules
+cimport cython
+import numpy as np
+cimport numpy as np
 from numpy import einsum
 from numpy.lib.stride_tricks import as_strided
+from numpy cimport ndarray, float_t
 
 
-def ssd(img, patch):
-    result = 0
 
-    # just one channel
-    if len(img.shape) == 2 and len(patch.shape) == 2:
-        result = result + sumsqdiff(img, patch)
-    elif len(img.shape) > 2 and len(patch.shape) > 2:
-        for k in range(0, img.shape[2]):
+cpdef ssd(ndarray[float_t, ndim=3] img,
+        ndarray[float_t, ndim=3] patch):
+    """
+    Calculates ssd between two rgb images
+    """
+    cdef ndarray result = None
+    cdef int k
+
+    for k in xrange(img.shape[2]):
+        if result is None:
+            result = sumsqdiff(img[:, :, k], patch[:, :, k])
+        else:
             result = result + sumsqdiff(img[:, :, k], patch[:, :, k])
-    else:
-        raise ValueError('Unresistant number of channels. Got img size = {0} '
-                         'and patch size = {1}'.format(img.shape, patch.shape))
 
     return result
 
 
-def sumsqdiff(img, patch):
+cpdef sumsqdiff(ndarray[float_t, ndim=2] img,
+              ndarray[float_t, ndim=2] patch):
     """
     We want to calculate the difference between patch and img.
     So we want a matrix M where:
@@ -39,13 +44,15 @@ def sumsqdiff(img, patch):
 
     To improve the performance, img can be represented as strided (y).
     """
+    cdef ndarray[float_t, ndim=2] ssd
+    cdef ndarray[float_t, ndim=4] y
 
-    patch_size = patch.shape
     # stride is the step through the memory to fast access data
     y = as_strided(img,
-                   shape=(img.shape[0] - patch_size[0] + 1,
-                          img.shape[1] - patch_size[1] + 1,) + patch_size,
-                   strides=img.strides * 2)
+                   shape=(img.shape[0] - patch.shape[0] + 1,
+                          img.shape[1] - patch.shape[1] + 1,)
+                         + (patch.shape[0], patch.shape[1]),
+                   strides=(img.strides[0], img.strides[1]) * 2)
     ssd = einsum('ijkl,kl->ij', y, patch)       # sum(a*b)
     ssd *= - 2
     ssd += einsum('ijkl, ijkl->ij', y, y)       # sum(a**2)
