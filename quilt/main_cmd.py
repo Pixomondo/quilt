@@ -122,6 +122,12 @@ def set_src_path(ctx, _, path):
     default=0,
     help='Number of 90 degrees rotations to apply to src')
 @click.option(
+    '-flip', '--flip',
+    type=tuple,
+    default=(False, False),
+    help='Tuple of booleans for (flip_vertical, flip_horizontal) to apply to '
+         'src')
+@click.option(
     '--debug/--no-debug',
     default=False,
     help='Enable/Disable debug messages and image display')

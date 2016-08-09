@@ -375,9 +375,9 @@ class Quilt:
     @classmethod
     def create_flip(cls, img, amount=(0, 0)):
         """
-        Generates the required rotations of the input image and builds an image
-        containing the input image and its rotations (the remaining space is
-        left zero). The final image is so composed:
+        Generates the required flips of the input image and builds an image
+        containing the input image and its flips.
+        The final image is so composed:
                               _______
         If amount = [0, 1]:  | img   |
                              |_______|

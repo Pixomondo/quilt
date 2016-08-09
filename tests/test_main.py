@@ -142,6 +142,7 @@ class TestCli(Cli):
             'constraint_start': True,
             'cores': 1,
             'rotations': 4,
+            'flip': (False, False),
             'output_size': [20, 10],
             'result_path': os.path.join(self.test_folder, 'dst_temp.jpg'),
         }
