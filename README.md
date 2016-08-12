@@ -1,10 +1,10 @@
-Quilt Source Code
-=================
+Copyright 2016 Pixomondo LLC.
+
 
 Quilt is a tool to create a bigger texture from a small one. Instead of 
 patching the input texture and then manually removing seams and 
 repetitions, this tool automatically breaks the texture into small tiles
-and seamlessly recombines them in the output image; doing to the 
+and seamlessly recombines them in the output image; doing so the 
 original texture structure is preserved and repetitions hard to notice.
 
 ![Alt text](data/figures/show_case.jpg?raw=true "Show case")
@@ -195,7 +195,9 @@ styles of Click.echo. Moreover, it is multi-threading in order to be used by
 multi-processes in Quilt.
 
 
-
+Licence
+=======
+This software is licensed under the GPL.
 
 
 
