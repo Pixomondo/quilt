@@ -103,10 +103,11 @@ following ways:
     minima. Doing so, masked values (infinite values) are not chosen. 
     - every masked area is expanded in order to prevent the algorithm to 
     choose all tiles that contain at least one masked pixel.
- *How*: add the option --input_mask followed by the masks's path. E.g.:
-    ```
-    quilt C:/data/tiles/tiles*.jpg --input_mask C:/data/mask.jpg
-    ``` 
+       
+     *How*: add the option --input_mask followed by the masks's path. E.g.:
+        ```
+        quilt C:/data/tiles/tiles*.jpg --input_mask C:/data/mask.jpg
+        ``` 
 
 - **output boundaries**: it is possible to provide a mask (black and
 white image) of the output image where white regions indicate areas to 
