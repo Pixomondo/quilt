@@ -101,7 +101,7 @@ class TestCli(Cli):
         """
         Test the input image is resize before it is passed to Quilt.
         """
-        self.invoke([self.src_glob, '-iscale', 0.8])
+        self.invoke([self.src_glob, '--input_scale', 0.8])
         src = [imresize(i, scale=0.8) for i in self.src_mtx]
         np.testing.assert_array_equal(src, mk_quilt.call_args[0][0])
 
@@ -113,20 +113,20 @@ class TestCli(Cli):
         command line options are set.
         """
         self.invoke([self.src_paths[0],
-                     '-imask', self.imask_path,
-                     '-iscale', 0.5,
-                     '-dst', os.path.join(self.test_folder, 'dst.jpg'),
-                     '-owidth', 10,
-                     '-oheight', 20,
-                     '-cmask', self.cmask_path,
-                     '-tile', 5,
-                     '-over', 2,
-                     '-btile', 10,
-                     '-bover', 4,
+                     '-i', self.imask_path,
+                     '-s', 0.5,
+                     '-d', os.path.join(self.test_folder, 'dst.jpg'),
+                     '-w', 10,
+                     '-h', 20,
+                     '--cut_mask', self.cmask_path,
+                     '-t', 5,
+                     '-o', 2,
+                     '--big_tilesize', 10,
+                     '--big_overlap', 4,
                      '--constraint_start', True,
                      '--cores', 1,
-                     '-err', 0.1,
-                     '-rot', 4
+                     '-e', 0.1,
+                     '-r', 4
                      ])
         src = imresize(deepcopy(self.src_mtx[0]), scale=0.5)
 
@@ -164,11 +164,11 @@ class TestCli(Cli):
         """
         # it could be a path to a non existing folder
         bad_dst = os.path.join(self.test_folder, 'bad_folder')
-        self.invoke([self.src_glob, '-dst', bad_dst], expected_code=2)
+        self.invoke([self.src_glob, '-d', bad_dst], expected_code=2)
 
         # it could be a path to a file in a non existing folder
         bad_dst = os.path.join(self.test_folder, 'bad_folder', 'test.jpg')
-        self.invoke([self.src_glob, '-dst', bad_dst], expected_code=2)
+        self.invoke([self.src_glob, '-d', bad_dst], expected_code=2)
 
 
 class TestComputation(Cli):
@@ -190,8 +190,8 @@ class TestComputation(Cli):
         Test Quilt.compute is called if a single process computation is required
         """
         # set up
-        self.invoke([self.src_glob, '-iscale', 0.2, '-multiproc', False,
-                     '-dst', self.dst_folder])
+        self.invoke([self.src_glob, '--input_scale', 0.2, '-m', False,
+                     '-d', self.dst_folder])
 
         # it called compute instead of optimized_compute
         mk_compute.assert_called_once_with()
@@ -202,7 +202,7 @@ class TestComputation(Cli):
         Test Quilt.optimized_compute is called if a multi process computation
         is required.
         """
-        self.invoke([self.src_glob, '-iscale', 0.2, '-dst', self.dst_folder])
+        self.invoke([self.src_glob, '-s', 0.2, '-d', self.dst_folder])
 
         # it called compute instead of optimized_compute
         mk_optimized.assert_called_once_with()
@@ -213,8 +213,8 @@ class TestComputation(Cli):
         Test the result images saved to disk when a stack of images is given as
         source. Test location, number and names.
         """
-        self.invoke([self.src_glob, '-iscale', 0.2, '-multiproc', False,
-                     '-dst', self.dst_folder])
+        self.invoke([self.src_glob, '-s', 0.2, '-m', False,
+                     '-d', self.dst_folder])
 
         # check the results
         results = os.listdir(self.dst_folder)
@@ -231,8 +231,8 @@ class TestComputation(Cli):
         Test the result image saved to disk when a single image is given as
         source. Test location, number and names.
         """
-        self.invoke([self.src_paths[0], '-iscale', 0.2, '-multiproc', False,
-                     '-dst', self.dst_folder])
+        self.invoke([self.src_paths[0], '-s', 0.2, '-m', False,
+                     '-d', self.dst_folder])
 
         # check the results
         results = os.listdir(self.dst_folder)

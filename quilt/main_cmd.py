@@ -8,9 +8,14 @@ from __future__ import division
 import time
 import os
 from os.path import split, splitext, join, isdir
-from pprint import pprint
 import glob
 from multiprocessing import cpu_count
+from collections import namedtuple
+import logging
+import multiprocessing
+import threading
+import traceback
+import sys
 
 # import 3rd party modules
 from PIL import Image
@@ -18,8 +23,132 @@ import click
 from click import BadParameter
 
 # import internal modules
-from process import Quilt
-from utils import save, show, imresize, img2matrix
+from quilt.process import Quilt
+from quilt.utils import save, show, imresize, img2matrix
+
+
+# styles for click logging
+_Style = namedtuple('_Style', 'fg bg bold dim underline blink reverse reset')
+_style = _Style(None, None, True, None, None, None, None, True)
+_STYLES = {
+    logging.CRITICAL: _style._replace(fg='red', blink=True),
+    logging.ERROR: _style._replace(fg='red', underline=True),
+    logging.WARNING: _style._replace(fg='yellow'),
+    logging.INFO: _style._replace(fg='green'),
+    logging.DEBUG: _style._replace(fg='cyan'),
+    logging.NOTSET: _style._replace(fg='magenta')}
+
+
+class ClickHandler(logging.Handler):
+    """
+    Logging handler that prints colorful messages with click.echo.
+    """
+    def __init__(self, level=logging.NOTSET, err=True):
+        super(ClickHandler, self).__init__(level=level)
+        self.err = err
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            try:
+                self.acquire()
+                click.echo(message=msg, err=self.err)
+            finally:
+                self.release()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+
+    def createLock(self):
+        self.lock = multiprocessing.RLock()
+
+
+class QueuedClickHandler(logging.Handler):
+    """
+    Multi-thread logging handler to handle logging with multi-processing (used
+    in Quilt). When called, the message is stored in a queue which is then read
+    by the worker and the message is passed to ClickHandler.
+    """
+
+    def __init__(self, level=logging.NOTSET, err=True):
+        super(QueuedClickHandler, self).__init__(level=level)
+        # handler that does the actual log message emission
+        self._handler = ClickHandler(level=level, err=err)
+        # queue to hold actual emitted messages
+        self.queue = multiprocessing.JoinableQueue(-1)
+        # worker to empty the queue
+        worker = threading.Thread(target=self.receive)
+        worker.daemon = True
+        worker.start()
+
+    def receive(self):
+        while True:
+            try:
+                record = self.queue.get()
+                self._handler.emit(record)
+                self.queue.task_done()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except EOFError:
+                break
+            except:
+                traceback.print_exc(file=sys.stderr)
+
+    def setFormatter(self, fmt):
+        logging.Handler.setFormatter(self, fmt)
+        self._handler.setFormatter(fmt)
+
+    def setLevel(self, lvl):
+        logging.Handler.setLevel(self, lvl)
+        self._handler.setLevel(lvl)
+
+    def _format_record(self, record):
+        if record.args:
+            record.msg = record.msg % record.args
+            record.args = None
+        if record.exc_info:
+            dummy = self.format(record)
+            record.exc_info = None
+        return record
+
+    def emit(self, record):
+        try:
+            self.queue.put(self._format_record(record))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+
+    def close(self):
+        self.queue.join()
+        self._handler.close()
+        logging.Handler.close(self)
+
+    def createLock(self):
+        self.lock = multiprocessing.RLock()
+
+
+class ClickFormatter(logging.Formatter):
+    """
+    Logging formatter that associated different log levels to different Click
+    styles.
+    """
+    def __init__(self, fmt=None, datefmt=None):
+        super(ClickFormatter, self).__init__(fmt=fmt, datefmt=datefmt)
+
+    def format(self, record):
+        return click.style(
+            super(ClickFormatter, self).format(record),
+                  **_STYLES[record.levelno]._asdict())
+
+
+# create logger
+h = QueuedClickHandler()
+h.setFormatter(ClickFormatter())
+log = logging.getLogger('quilt')
+log.addHandler(h)
+logging.root.setLevel(0)
 
 
 def set_src_path(ctx, _, path):
@@ -50,54 +179,54 @@ def set_src_path(ctx, _, path):
     type=click.Path(),
     callback=set_src_path)
 @click.option(
-    '-imask', '--input_mask',
+    '-i', '--input_mask',
     type=click.Path(exists=True, dir_okay=False),
     callback=lambda ctx, _, x: Image.open(x) if x else None,
     help="Mask on the input to remove image areas with unwanted content")
 @click.option(
-    '-iscale', '--input_scale',
+    '-s', '--input_scale',
     type=click.FLOAT,
     default=1,
     help="Scale to apply to the input image before computing")
 @click.option(
-    '-dst', '--destination',
+    '-d', '--destination',
     type=click.Path(),
     help='Path to the result folder')
 @click.option(
-    '-owidth', '--output_width',
+    '-w', '--output_width',
     type=click.INT,
     help='Width of the result image')
 @click.option(
-    '-oheight', '--output_height',
+    '-h', '--output_height',
     type=click.INT,
     help='Height of the result image')
 @click.option(
-    '-cmask', '--cut_mask',
+    '-c', '--cut_mask',
     type=click.Path(exists=True, dir_okay=False),
     callback=lambda ctx, _, x: img2matrix(Image.open(x)) if x else None,
     help='Mask for the output image')
 @click.option(
-    '-tile', '--tilesize',
+    '-t', '--tilesize',
     type=click.INT,
     default=30,
     help='Size of the small tiles')
 @click.option(
-    '-over', '--overlap',
+    '-o', '--overlap',
     type=click.INT,
     default=10,
     help='Size of the small overlap')
 @click.option(
-    '-btile', '--big_tilesize',
+    '--big_tilesize',
     type=click.INT,
     default=500,
     help='Size of the big tiles')
 @click.option(
-    '-bover', '--big_overlap',
+    '--big_overlap',
     type=click.INT,
     default=100,
     help='Size of the big overlap')
 @click.option(
-    '-err', '--error',
+    '-e', '--error',
     type=click.FLOAT,
     default=0.2,
     help='Error accepted in selecting similar tiles')
@@ -112,17 +241,17 @@ def set_src_path(ctx, _, path):
     default=cpu_count()-2,
     help='Number of available cores')
 @click.option(
-    '-multiproc', '--multiprocess',
+    '-m', '--multiprocess',
     type=click.BOOL,
     default=True,
     help='Multiprocess (faster) or single process computation')
 @click.option(
-    '-rot', '--rotations',
+    '-r', '--rotations',
     type=click.IntRange(0, 4),
     default=0,
     help='Number of 90 degrees rotations to apply to src')
 @click.option(
-    '-flip', '--flip',
+    '-f', '--flip',
     type=tuple,
     default=(False, False),
     help='Tuple of booleans for (flip_vertical, flip_horizontal) to apply to '
@@ -135,8 +264,10 @@ def cli(src, **kwargs):
     """
     Parses the arguments for quilt processing.
     """
-    pprint(src)
-    pprint(kwargs)
+
+    # set log to debug if necessary
+    debug = kwargs.pop('debug')
+    log.setLevel(0 if debug else 20)
 
     # turn paths into matrices. We need to do it here because we need iscale val
     src_matrices = []
@@ -151,8 +282,8 @@ def cli(src, **kwargs):
         kwargs['input_mask'] = img2matrix(kwargs['input_mask'])
 
     kwargs.pop('input_scale')
-    hgt = kwargs.pop('output_height') or src_matrices[0].shape[0]
-    wdt = kwargs.pop('output_width') or src_matrices[0].shape[1]
+    hgt = kwargs.pop('output_height') or src_matrices[0].shape[0]*2
+    wdt = kwargs.pop('output_width') or src_matrices[0].shape[1]*2
     kwargs['output_size'] = [hgt, wdt]
 
     # destination paths
@@ -192,49 +323,43 @@ def cli(src, **kwargs):
 
     # derive the temp path to pass to Quilt
     kwargs['result_path'] = path_form.format('_temp')
-    _launch_quilt(result_path, src_matrices, **kwargs)
+    _launch_quilt(debug, result_path, src_matrices, **kwargs)
 
 
-def _launch_quilt(final_path, src, **kwargs):
+def _launch_quilt(debug, final_path, src, **kwargs):
     """
     Launches quilt process with the parsed arguments.
     """
 
     multi_proc = kwargs.pop('multiprocess')
-    debug = kwargs.pop('debug')
 
     # ------------- quilt --------------
 
     qs = time.time()
-    print 'Quilt started at {0}'.format(time.strftime("%H:%M:%S"))
+    log.info('Quilt started at {0}'.format(time.strftime("%H:%M:%S")))
 
-    # compute quilting
+    try:
+        # compute quilting
+        Quilt.debug = debug
+        q = Quilt(src, **kwargs)
+        if multi_proc:
+            q.optimized_compute()
+        else:
+            q.compute()
 
-    Quilt.debug = debug
-    q = Quilt(src, **kwargs)
-    if multi_proc:
-        q.optimized_compute()
-    else:
-        q.compute()
+        # get the result
+        result = q.get_result()
+        if debug:
+            show(result)
+        save(result, final_path)
 
-    # get the result
-    result = q.get_result()
-    if debug:
-        show(result)
-    save(result, final_path)
-
-    # track = None
-    # if config['preview']:
-    #     print '\n- PREVIEW -'
-    #     track = q.optimized_compute_big(preview=True)
-    #     track = q.optimized_compute_big(preview=True, tracked=track)
-    # if config['full']:
-    #     print '\n- FULL -'
-    #     track = q.optimized_compute_big(preview=False, tracked=track)
+    except ValueError as err:
+        log.error(err.message)
+        return
 
     t = (time.time()-qs)/60
-    print 'Quilt took {0:0.6f} minutes'.format(t)
-    print 'End {0}'.format(time.strftime("%H:%M:%S"))
+    log.debug('Quilt took {0:0.6f} minutes'.format(t))
+    log.info('End {0}'.format(time.strftime("%H:%M:%S")))
 
 
 if __name__ == '__main__':

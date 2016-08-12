@@ -97,8 +97,6 @@ class TestConstructor(unittest.TestCase):
         expected = zeros((100, 200, 3))
         assert_array_equal(expected, q.Y[0])
         expected = zeros((100, 200))
-        print 'shape:', q.Ymask.shape
-        print 'value:', np.unique(q.Ymask)
         assert_array_equal(expected, q.Ymask)
 
     def test_dst_img_mask(self):

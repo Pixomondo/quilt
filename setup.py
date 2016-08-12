@@ -69,7 +69,8 @@ setup(
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['Click',
+    install_requires=['colorama',
+                      'Click>=6.6',
                       'numpy>=1.10.4',
                       'Pillow>=2.7.0',
                       'PyMaxflow>=1.2.4'],

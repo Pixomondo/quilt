@@ -209,7 +209,6 @@ def save(img, path):
             image.save(path[idx])
         else:
             im = deepcopy(image)
-            print 'saving', path[idx]
             if im.dtype == np.dtype('uint8'):
                 matrix2img(im).save(path[idx])
             elif im.dtype == np.dtype('float64'):
