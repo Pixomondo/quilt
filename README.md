@@ -7,6 +7,8 @@ repetitions, this tool automatically breaks the texture into small tiles
 and seamlessly recombines them in the output image; doing to the 
 original texture structure is preserved and repetitions hard to notice.
 
+![Alt text](data/figures/show_case.jpg?raw=true "Show case")
+
 
 Creation Process
 ----------------
@@ -19,7 +21,7 @@ Once found, we cut the two tiles on the pixels that match the best. To
 do that we compute the minimal cut in the overlapping area and cut the 
 tiles accordingly. In this way no seam will be visible.
 
-![Alt text](/data/figures/quilt_schema.png?raw=true "Tile Schema")
+![Alt text](data/figures/quilt_schema.png?raw=true "Tile Schema")
 
 **Patch matching**
 If a patch has already been placed in the output image, the adjacent 
@@ -81,10 +83,12 @@ one will be extended to the following: the output will be a set of
 images with the same mutual relations (color, bump. spec, etc.).
  *How*: provide a generic path. E.g.: 
     ```
-    quilt C:/data/flowers/flower-*.png
+    quilt C:/data/tiles/tiles*.jpg
     ```
     this will indicate to consider all the images in the folder whose 
-    name respect the given pattern (e.g. flower-0.png, flower-bump.png)
+    name respect the given pattern (e.g. tiles.jpg, tiles_bump.jpg)
+    
+  ![Alt text](data/figures/layers.png?raw=true "Layers")
 
 - **remove areas**: it is possible to provide a mask (black and white 
 image) of the input texture where black regions indicate areas that 
@@ -101,7 +105,7 @@ following ways:
     choose all tiles that contain at least one masked pixel.
  *How*: add the option --input_mask followed by the masks's path. E.g.:
     ```
-    quilt C:/data/flowers/flower-*.png --input_mask C:/data/mask.jpg
+    quilt C:/data/tiles/tiles*.jpg --input_mask C:/data/mask.jpg
     ``` 
 
 - **output boundaries**: it is possible to provide a mask (black and
@@ -109,8 +113,8 @@ white image) of the output image where white regions indicate areas to
 cover with texture, while back areas are desired to be filled with
 background.
  *How*: add the option --cut_mask followed by the masks's path.
-     ```
-    quilt C:/data/flowers/flower-*.png --cut_mask C:/data/mask.jpg
+    ```
+    quilt C:/data/tiles/tiles*.png --cut_mask C:/data/mask.jpg
     ``` 
     
     Notes: 
@@ -121,6 +125,45 @@ background.
     color (e.g. black or white). 
     * the boundaries are an indication, they will not be precisely 
      reproduced.
+
+
+Getting more variations:
+------------------------
+In order to get more variations in the output image it is possible to 
+source the tiles not only from the input image, but also from its 
+rotations or flipped versions. 
+Command line parameters:
+
+- **rotations**: number of rotations of 90 degrees to apply to the input 
+image before the computation. Possible values are: 0, 2 (0' and 180') 
+and 4 (0', 90', 180', 270'). (default: 0)
+If this option is selected, a new source image is created, combining 
+together the input image and its rotation/s. The images are organized as
+shown in the drawing (the extra area in the four rotations is left at 0):
+
+![Alt text](data/figures/rotations.jpg?raw=true "Rotations Schema")
+
+
+- **flip**: boolean tuple for (flip_vertical, flip_horizontal). The
+image if flipped in the following way:
+
+![Alt text](data/figures/flips.jpg?raw=true "Rotations mask")
+       
+When rotation or flip is performed, an input mask is created which masks
+the empty areas and the edges between the images in the source. In this 
+way, no patch containing parts of different images is be sourced during
+the synthesis process. Here is an example of mask derived from a four-
+rotation. Notice that is the user provides a custom input mask, the two
+are added together. 
+
+![Alt text](data/figures/rotations_mask.jpg?raw=true "Rotations mask")
+           
+Usage notes:
+
+- this goodness of these features is strictly related to the nature of 
+the input texture: usually, if the texture is oriented (anisotropic) the
+use of these features is not advised.
+- these feature slow down the computation time.
 
 
 Performance
@@ -145,46 +188,11 @@ same of cores, a better performance will be achieved. (default: 500)
 - big_overlap: size of the overlap for the big tiles. (default: 100)
 
 
-Getting more variations:
-------------------------
-In order to get more variations in the output image it is possible to 
-source the tiles not only from the input image, but also from its 
-rotations or flipped versions. 
-Command line parameters:
-
-- **rotations**: number of rotations of 90 degrees to apply to the input 
-image before the computation. Possible values are: 0, 2 (0' and 180') 
-and 4 (0', 90', 180', 270'). (default: 0)
-If this option is selected, a new source image is created, combining 
-together the input image and its rotation/s. The images are organized as
-shown in the drawing (the extra area in the four rotations is left at 0):
-
-![Alt text](/data/figures/rotations.jpg?raw=true "Rotations Schema")
-
-
-- **flip**: boolean tuple for (flip_vertical, flip_horizontal). The
-image if flipped in the following way:
-
-![Alt text](/data/figures/flips.jpg?raw=true "Rotations mask")
-       
-When rotation or flip is performed, an input mask is created which masks
-the empty areas and the edges between the images in the source. In this 
-way, no patch containing parts of different images is be sourced during
-the synthesis process. Here is an example of mask derived from a four-
-rotation. Notice that is the user provides a custom input mask, the two
-are added together. 
-
-![Alt text](/data/figures/rotations_mask.jpg?raw=true "Rotations mask")
-           
-Usage notes:
-
-- this goodness of these features is strictly related to the nature of 
-the input texture: usually, if the texture is oriented (anisotropic) the
-use of these features is not advised.
-- these feature slow down the computation time.
-
-
-
+Logging
+-------
+Logging is currenlt on StandardError only. It is customized in order to use the 
+styles of Click.echo. Moreover, it is multi-threading in order to be used by
+multi-processes in Quilt.
 
 
 
