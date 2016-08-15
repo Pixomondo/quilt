@@ -1,18 +1,25 @@
 Copyright 2016 Pixomondo LLC.
 
+Licence
+=======
+This software is licensed under the GPL.
+
+
+Quilt tool
+==========
 
 Quilt is a tool to create a bigger texture from a small one. Instead of 
 patching the input texture and then manually removing seams and 
 repetitions, this tool automatically breaks the texture into small tiles
 and seamlessly recombines them in the output image; doing so the 
-original texture structure is preserved and repetitions hard to notice.
+original texture structure is preserved and repetitions are hard to notice.
 
 ![Alt text](data/figures/show_case.jpg?raw=true "Show case")
 
 
 Creation Process
 ----------------
-The output texture is created composing overlapping tiles from the input 
+The output texture is created by composing overlapping tiles from the input 
 texture in the following way:
 Given the already-placed tile B1, we choose the tile B2 as the best 
 matching tile (or a random choice among the best matching tiles), that 
@@ -23,7 +30,7 @@ tiles accordingly. In this way no seam will be visible.
 
 ![Alt text](data/figures/quilt_schema.png?raw=true "Tile Schema")
 
-**Patch matching**
+### Patch matching
 If a patch has already been placed in the output image, the adjacent 
 patch is found in the following way:
  1. consider the overlap area of the already placed patch 
@@ -52,8 +59,8 @@ Basic parameters:
 - tilesize: size of the tiles, i.e. units of the texture synthesis 
 process (default: 30). 
 - overlap: amount of overlap between two tiles (default: 10). Note: the
-bigger the overlap is the longer is the computation, but the less seams
-will be visible in the texture. Overlap value should be > 0, 
+bigger the overlap the slower, but the less seams will be visible in the 
+texture. Overlap value should be > 0, 
 < (tilesize/2).
 - error: amount of error accepted in the selection of the tiles. A small
 error (e.g. 0.002) reduces the probability of artifacts, but increase 
@@ -71,7 +78,7 @@ quilting computation. This parameter is useful when the input image is
 big, and it would take a long time to compute, or when the desired level
 of details of the output image is smaller (or larger) than the one of 
 input image. (default: 1)
-- constraint_start: constraint the first tile (up left corner) to be the
+- constraint_start: constrain the first tile (up left corner) to be the
 same of the input image
 
 
@@ -81,7 +88,7 @@ Customization
 images (color, bump, spec, etc) as input. The computation of the first 
 one will be extended to the following: the output will be a set of 
 images with the same mutual relations (color, bump. spec, etc.).
- *How*: provide a generic path. E.g.: 
+ *How*: provide a generic path. 
     ```
     quilt C:/data/tiles/tiles*.jpg
     ```
@@ -104,7 +111,7 @@ following ways:
     - every masked area is expanded in order to prevent the algorithm to 
     choose all tiles that contain at least one masked pixel.
        
-     *How*: add the option --input_mask followed by the masks's path. E.g.:
+     *How*: add the option --input_mask followed by the masks's path. 
         ```
         quilt C:/data/tiles/tiles*.jpg --input_mask C:/data/mask.jpg
         ``` 
@@ -131,8 +138,8 @@ background.
 Getting more variations:
 ------------------------
 In order to get more variations in the output image it is possible to 
-source the tiles not only from the input image, but also from its 
-rotations or flipped versions. 
+source the tiles not only from the input image, but also from rotated or 
+flipped versions.
 Command line parameters:
 
 - **rotations**: number of rotations of 90 degrees to apply to the input 
@@ -154,14 +161,14 @@ When rotation or flip is performed, an input mask is created which masks
 the empty areas and the edges between the images in the source. In this 
 way, no patch containing parts of different images is be sourced during
 the synthesis process. Here is an example of mask derived from a four-
-rotation. Notice that is the user provides a custom input mask, the two
+rotation. Notice that if the user provides a custom input mask, the two
 are added together. 
 
 ![Alt text](data/figures/rotations_mask.jpg?raw=true "Rotations mask")
            
 Usage notes:
 
-- this goodness of these features is strictly related to the nature of 
+- the applicability of these features is strictly related to the nature of 
 the input texture: usually, if the texture is oriented (anisotropic) the
 use of these features is not advised.
 - these feature slow down the computation time.
@@ -172,7 +179,7 @@ Performance
 It is possible perform a single process computation or a multi-process 
 computation. 
 
-**Overview of the multi-process computation**
+### Overview of the multi-process computation
 The first process computes quilting with big tiles. Once done, it 
 creates new processes (one per available core) and assigns a big-tile to 
 each of them. Each sub-process then performs the quilting computation 
@@ -191,14 +198,8 @@ same of cores, a better performance will be achieved. (default: 500)
 
 Logging
 -------
-Logging is currenlt on StandardError only. It is customized in order to use the 
-styles of Click.echo. Moreover, it is multi-threading in order to be used by
-multi-processes in Quilt.
-
-
-Licence
-=======
-This software is licensed under the GPL.
+Logging is currently to stderr only. It is customized to allow colored output, 
+and to use a queue so that logging can be gathered from multiple processes.
 
 
 

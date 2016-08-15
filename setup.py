@@ -10,13 +10,14 @@ setup(
     version='0.0.1',
 
     description='Texture synthesis through Quilting implementation',
-    long_description="""
-    Quilt is a python tool to synthesize a texture starting from an input one.
-    Instead of patching the input texture and then manually removing seams and
-    repetitions, this tool automatically breaks the texture into small tiles
-    and seamlessly recombines them in the output image. With this process the
-    original texture structure is preserved and repetitions hard to notice.
-    """,
+    long_description='Quilt is a python tool to synthesize a texture ' \
+                     'starting from an input one. Instead of patching the ' \
+                     'input texture and then manually removing seams and '  \
+                     'repetitions, this tool automatically breaks the '  \
+                     'texture into small tiles and seamlessly recombines '  \
+                     'them in the output image. With this process the '  \
+                     'original texture structure is preserved and repetitions' \
+                     ' hard to notice.',
 
     # The project's main homepage.
     url='https://github.com/Pixomondo/quilt',
