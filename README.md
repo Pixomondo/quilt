@@ -56,29 +56,29 @@ quilt C:/data/image.jpg
 
 Basic parameters:
 
-- tilesize: size of the tiles, i.e. units of the texture synthesis 
+- **tilesize**: size of the tiles, i.e. units of the texture synthesis 
 process (default: 30). 
-- overlap: amount of overlap between two tiles (default: 10). Note: the
+- **overlap**: amount of overlap between two tiles (default: 10). Note: the
 bigger the overlap the slower, but the less seams will be visible in the 
 texture. Overlap value should be > 0, 
 < (tilesize/2).
-- error: amount of error accepted in the selection of the tiles. A small
+- **error**: amount of error accepted in the selection of the tiles. A small
 error (e.g. 0.002) reduces the probability of artifacts, but increase 
 the one of repetitions, while a big error (e.g. 0.5) leads to the 
 opposite behaviour.
-- output_width and output_height: width and height of the output image.
-- destination: path to the folder where to store the output. If not 
+- **output_width** and **output_height**: width and height of the output image.
+- **destination**: path to the folder where to store the output. If not 
 specified, the folder of the input file is taken. Output file name: 
 <input_file_name>_result.png
 
 Additional basic parameters:
 
-- input_scale: scale to apply to the input texture before launching the
+- **input_scale**: scale to apply to the input texture before launching the
 quilting computation. This parameter is useful when the input image is 
 big, and it would take a long time to compute, or when the desired level
 of details of the output image is smaller (or larger) than the one of 
 input image. (default: 1)
-- constraint_start: constrain the first tile (up left corner) to be the
+- **constraint_start**: constrain the first tile (up left corner) to be the
 same of the input image
 
 
@@ -187,13 +187,13 @@ with regular-sized tiles. Once all the big tiles have been processed,
 the results are seamlessly patched. 
 Command line parameters:
 
-- multiprocess: performs the multiprocessing computation (default: True)
-- cores: number of cores available for quilting (default: number of 
+- **multiprocess**: performs the multiprocessing computation (default: True)
+- **cores**: number of cores available for quilting (default: number of 
 cores in the machine minus two)
-- big_tilesize: size of the big tiles. Note that if the number of big 
+- **big_tilesize**: size of the big tiles. Note that if the number of big 
 tiles that fit in the destination image (considering overlapping) is the 
 same of cores, a better performance will be achieved. (default: 500)
-- big_overlap: size of the overlap for the big tiles. (default: 100)
+- **big_overlap**: size of the overlap for the big tiles. (default: 100)
 
 
 Logging

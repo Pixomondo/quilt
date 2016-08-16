@@ -113,20 +113,20 @@ class TestCli(Cli):
         command line options are set.
         """
         self.invoke([self.src_paths[0],
-                     '-i', self.imask_path,
-                     '-s', 0.5,
-                     '-d', os.path.join(self.test_folder, 'dst.jpg'),
-                     '-w', 10,
-                     '-h', 20,
+                     '--input_mask', self.imask_path,
+                     '--input_scale', 0.5,
+                     '--destination', os.path.join(self.test_folder, 'dst.jpg'),
+                     '--output_width', 10,
+                     '--output_height', 20,
                      '--cut_mask', self.cmask_path,
-                     '-t', 5,
-                     '-o', 2,
+                     '--tilesize', 5,
+                     '--overlap', 2,
                      '--big_tilesize', 10,
                      '--big_overlap', 4,
                      '--constraint_start', True,
                      '--cores', 1,
-                     '-e', 0.1,
-                     '-r', 4
+                     '--error', 0.1,
+                     '--rotations', 4
                      ])
         src = imresize(deepcopy(self.src_mtx[0]), scale=0.5)
 
@@ -164,11 +164,11 @@ class TestCli(Cli):
         """
         # it could be a path to a non existing folder
         bad_dst = os.path.join(self.test_folder, 'bad_folder')
-        self.invoke([self.src_glob, '-d', bad_dst], expected_code=2)
+        self.invoke([self.src_glob, '--destination', bad_dst], expected_code=2)
 
         # it could be a path to a file in a non existing folder
         bad_dst = os.path.join(self.test_folder, 'bad_folder', 'test.jpg')
-        self.invoke([self.src_glob, '-d', bad_dst], expected_code=2)
+        self.invoke([self.src_glob, '--destination', bad_dst], expected_code=2)
 
 
 class TestComputation(Cli):
@@ -190,8 +190,8 @@ class TestComputation(Cli):
         Test Quilt.compute is called if a single process computation is required
         """
         # set up
-        self.invoke([self.src_glob, '--input_scale', 0.2, '-m', False,
-                     '-d', self.dst_folder])
+        self.invoke([self.src_glob, '--input_scale', 0.2,
+                     '--multiprocess', False, '--destination', self.dst_folder])
 
         # it called compute instead of optimized_compute
         mk_compute.assert_called_once_with()
@@ -202,7 +202,8 @@ class TestComputation(Cli):
         Test Quilt.optimized_compute is called if a multi process computation
         is required.
         """
-        self.invoke([self.src_glob, '-s', 0.2, '-d', self.dst_folder])
+        self.invoke([self.src_glob, '--input_scale', 0.2,
+                     '--destination', self.dst_folder])
 
         # it called compute instead of optimized_compute
         mk_optimized.assert_called_once_with()
@@ -213,8 +214,8 @@ class TestComputation(Cli):
         Test the result images saved to disk when a stack of images is given as
         source. Test location, number and names.
         """
-        self.invoke([self.src_glob, '-s', 0.2, '-m', False,
-                     '-d', self.dst_folder])
+        self.invoke([self.src_glob, '--input_scale', 0.2,
+                     '--multiprocess', False, '--destination', self.dst_folder])
 
         # check the results
         results = os.listdir(self.dst_folder)
@@ -231,8 +232,8 @@ class TestComputation(Cli):
         Test the result image saved to disk when a single image is given as
         source. Test location, number and names.
         """
-        self.invoke([self.src_paths[0], '-s', 0.2, '-m', False,
-                     '-d', self.dst_folder])
+        self.invoke([self.src_paths[0], '--input_scale', 0.2,
+                     '--multiprocess', False, '--destination', self.dst_folder])
 
         # check the results
         results = os.listdir(self.dst_folder)
