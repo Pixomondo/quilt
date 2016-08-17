@@ -15,6 +15,7 @@ from __future__ import division
 from copy import deepcopy
 from multiprocessing import cpu_count, Queue, Pool, JoinableQueue
 import time
+import logging
 
 # import 3rd party modules
 import numpy as np
@@ -23,10 +24,10 @@ from numpy import fliplr, flipud
 from numpy.random import rand
 
 # import internal modules
-from ssd import ssd
-from mincut import mincut
-from utils import gray2rgb, filter_img, rgb2gray, im2double, imresize
-from utils import show, save
+from quilt.ssd import ssd
+from quilt.mincut import mincut
+from quilt.utils import gray2rgb, filter_img, rgb2gray, im2double, imresize
+from quilt.utils import show, save
 
 
 def unwrap_self(*arg, **kwarg):
@@ -36,6 +37,7 @@ def unwrap_self(*arg, **kwarg):
 class Quilt:
 
     debug = True
+    log = None
 
     def __init__(self, X, output_size=None,
                  input_mask=None, cut_mask=None,
@@ -96,23 +98,25 @@ class Quilt:
                    computation. Relevant only if compute is called.
         """
 
+        self.log = logging.getLogger(__name__)
+
         # tile size and overlap
         if overlap >= tilesize:
             raise ValueError('Overlap must be less than the tile size')
         self.tilesize = long(tilesize)
         self.overlap = overlap or int(round(self.tilesize / 5))
-        print 'overlap:', overlap, 'tile size:', self.tilesize
+        self.log.debug('overlap: {0}, tile size: {1}'.format(overlap, self.tilesize))
 
         # ------ images ------
         # src
-        print 'rot:', rotations
-        print 'flip:', flip
+        self.log.debug('rot: {0}'.format(rotations))
+        self.log.debug('flip: {0}'.format(flip))
         X, self.X = self._set_src(X, rotate=rotations, flip=flip)
-        print 'X: len:', len(X), '- dim:', self.X[0].shape
+        self.log.debug('X: len: {0} - dim: {1}'.format(len(X), self.X[0].shape))
         self.Xmask = self._set_src_mask(input_mask, self.tilesize, reference=X,
                                         rotate=rotations, flip=flip)
-        print 'Xmask:', self.Xmask is None and 'None' or self.Xmask.shape
-
+        self.log.debug('Xmask: {0}'.format(self.Xmask is None and 'None' or
+                                      self.Xmask.shape))
         # dst
         if output_size:
             output_size = output_size or 2 * X.shape[0:2]
@@ -121,9 +125,9 @@ class Quilt:
         else:
             raise ValueError("Please provide the output_size or cut_mask")
         self.num_tiles = self.calc_num_tiles(output_size)
-        print 'num tiles:', self.num_tiles
+        self.log.debug('num tiles: {0}'.format(self.num_tiles))
         self.Y = self._set_dst(output_size)
-        print 'Y: len:', len(self.Y), '- dim:', self.Y[0].shape
+        self.log.debug('Y: len: {0} - dim: {1}'.format(len(self.Y), self.Y[0].shape))
         self.Ymask = self._set_cut_mask(cut_mask, output_size)
 
         # ----- big tiles -------------------
@@ -134,7 +138,8 @@ class Quilt:
         self.Xmask_big = self._set_src_mask(input_mask, self.big_tilesize,
                                             reference=X,
                                             rotate=rotations, flip=flip)
-        print 'Big overlap:', self.big_overlap, 'tile size:', self.big_tilesize
+        self.log.debug('Big overlap: {0}, tile size:'.format(self.big_overlap,
+                                                        self.big_tilesize))
 
         # ------ independent parameters ------
 
@@ -145,7 +150,6 @@ class Quilt:
         self.constraint_start = constraint_start
         self.result_path = result_path
         self.cores = cores or cpu_count()-2
-        self.preview = False
         self.niter = niter
 
     def _set_src(self, img, rotate=0, flip=None):
@@ -212,7 +216,7 @@ class Quilt:
         # no mask
         if mask is None:
             if not rotate and flip == (0, 0):
-                print 'Xmask: None'
+                self.log.debug('Xmask: None')
                 return
             # create the mask to remove the lines between the rotations
             mask = ones(reference.shape[0:2])
@@ -254,7 +258,7 @@ class Quilt:
                 if np.any(tile == inf):
                     mask[i, j] = inf
 
-        print 'Xmask:', mask.shape, ', values:', np.unique(mask)
+        self.log.debug('Xmask: {0} values: {1}'.format(mask.shape, np.unique(mask)))
         return mask
 
     def _set_dst(self, size):
@@ -289,7 +293,7 @@ class Quilt:
             mask of the destination image
         """
         if mask is None:
-            print 'Ymask: None'
+            self.log.debug('Ymask: None')
             return
 
         # 1 channel
@@ -305,7 +309,7 @@ class Quilt:
         mask[mask < 0.01] = 0
         mask[mask > 0] = 1
 
-        print 'Ymask:', mask.shape
+        self.log.debug('Ymask: {0}'.format(mask.shape))
         return mask
 
     @classmethod
@@ -375,9 +379,9 @@ class Quilt:
     @classmethod
     def create_flip(cls, img, amount=(0, 0)):
         """
-        Generates the required rotations of the input image and builds an image
-        containing the input image and its rotations (the remaining space is
-        left zero). The final image is so composed:
+        Generates the required flips of the input image and builds an image
+        containing the input image and its flips.
+        The final image is so composed:
                               _______
         If amount = [0, 1]:  | img   |
                              |_______|
@@ -481,7 +485,7 @@ class Quilt:
         """
         Single, traditional, single process computation.
         """
-        print '\nCOMPUTING ...'
+        self.log.info('\nCOMPUTING ...')
 
         for n in xrange(self.niter):
             for i in xrange(self.num_tiles[0]):
@@ -507,17 +511,13 @@ class Quilt:
 
                     # Dist from each tile to the overlap region
                     y_patches = [y[startI:endI, startJ:endJ, :] for y in self.Y]
-                    res_patches, track = self._compute_patch(
+                    res_patches = self._compute_patch(
                         y_patches, [sizeI, sizeJ], (i, j), mask=self.Xmask,
                         constraint_start=self.constraint_start)
                     for idx, res in enumerate(res_patches):
                         self.Y[idx][startI:endI, startJ:endJ, :] = res
 
-                # if i % 5 == 0:
-                #     print 'row', i, '/', self.num_tiles[0]
-                #     if self.result_path:
-                #         save(self.Y, self.result_path)
-            # print 'iter', n, '/', self.niter
+            self.log.debug('iter {0} / {1}'.format(n, self.niter))
             show(self.Y[0]) if self.debug else None
             if self.result_path:
                 save(self.Y[0], self.result_path)
@@ -643,7 +643,7 @@ class Quilt:
     # ################## MULTIPROCESS OPTIMIZATION ############################
     # #########################################################################
 
-    def optimized_compute(self, preview=False, tracked=None):
+    def optimized_compute(self):
         """
         First process: it computes the quilt algorithm with big tiles,
         manages child processes and them combines the results.
@@ -657,10 +657,8 @@ class Quilt:
          for each of the tile: process n
 
         """
-        self.preview = preview
-        track = {}
 
-        print '\nMULTIPROCESSING COMPUTING ...'
+        self.log.info('\nMULTIPROCESSING COMPUTING ...')
 
         big_num_tiles = self.calc_num_tiles(tile_size=self.big_tilesize,
                                             overlap=self.big_overlap)
@@ -670,7 +668,8 @@ class Quilt:
         out_queue = Queue()
         in_queue = JoinableQueue()
         pool = Pool(n_proc, unwrap_self, (self, in_queue, out_queue,))
-        print 'preparing', n_proc, 'processes', time.strftime("%H:%M:%S")
+        self.log.info('preparing {0} processes - {1}'.
+                 format(n_proc, time.strftime("%H:%M:%S")))
 
         if self.Ymask is not None:
             # zero values will become inf
@@ -698,12 +697,9 @@ class Quilt:
                 dst_patches = [y[startI:endI, startJ:endJ, :] for y in self.Y]
                 # for the big tiles don't consider the mask, since it would
                 # remove most of the image because the tiles are so big
-                res_patches, track_patch = self._compute_patch(
+                res_patches = self._compute_patch(
                     dst_patches, [sizeI, sizeJ], (i, j), mask=self.Xmask_big,
-                    constraint_start=self.constraint_start, err=0.8,
-                    tracked=None if not tracked else
-                    tracked.get((startI, startJ))[0])
-                track[(startI, startJ)] = track_patch.values()
+                    constraint_start=self.constraint_start, err=0.8)
 
                 # add the mask on top
                 if self.Ymask is not None:
@@ -717,56 +713,39 @@ class Quilt:
                 _mask = self.Ymask[startI:endI, startJ:endJ] \
                     if self.Ymask is not None else None
                 _id = (startI, startJ)
-                _tracked = None if not tracked else \
-                    tracked.get((startI, startJ))[1]
-                in_queue.put({'dst': _img, 'mask': _mask, 'id': _id,
-                              'tracked': _tracked})
-                # print _id, 'launched '
+                in_queue.put({'dst': _img, 'mask': _mask, 'id': _id})
 
         # wait for all the children
-        print 'master finished:', time.strftime("%H:%M:%S")
+        self.log.debug('master finished {0}'.format(time.strftime("%H:%M:%S")))
         show(self.Y[0]) if self.debug else None
         pool.close()
-        print 'closed, in queue:', in_queue.qsize(), 'out:', out_queue.qsize()
+        self.log.debug('closed, in queue: {0} out: {1}'.format(in_queue.qsize(),
+                                                          out_queue.qsize()))
         in_queue.join()
-        print 'all children finished', time.strftime("%H:%M:%S")
+        self.log.debug('all children finished {0}'.format(time.strftime("%H:%M:%S")))
 
         # get the results
-        results = sorted([out_queue.get() for _ in xrange(big_num_tiles[0]*big_num_tiles[1])])
+        results = sorted([out_queue.get() for _ in
+                          xrange(big_num_tiles[0]*big_num_tiles[1])])
 
-        if self.preview:
-            print 'preview ...'
-            # do not sew them
-            for idx, res, trk in results:
-                # store tracking data
-                track[idx].append(trk)
-                # layers
-                for i in xrange(len(self.Y)):
-                    self.Y[i][idx[0]:idx[0] + self.big_tilesize,
-                              idx[1]:idx[1] + self.big_tilesize, :] = res[i]
+        # sew them together
+        for idx, res in results:
 
-        else:
-            print 'not preview ...'
-            # sew them together
-            for idx, res, trk in results:
-                # store tracking data
-                track[idx].append(trk)
-
-                # calculate the mask
-                base_patch = self.Y[0][idx[0]:idx[0] + self.big_tilesize,
-                                       idx[1]:idx[1] + self.big_tilesize]
-                new_patch = res[0]
-                mask_patch = self.calc_patch_mask(base_patch, new_patch,
-                                                  coord=idx,
-                                                  overlap=self.big_overlap)
-                # apply the mask to each layer
-                for i, y in enumerate(self.Y):
-                    base_patch = y[idx[0]:idx[0] + self.big_tilesize,
+            # calculate the mask
+            base_patch = self.Y[0][idx[0]:idx[0] + self.big_tilesize,
                                    idx[1]:idx[1] + self.big_tilesize]
-                    new_patch = res[i]
-                    self.Y[i][idx[0]:idx[0]+self.big_tilesize,
-                              idx[1]:idx[1]+self.big_tilesize, :] = \
-                        filter_img(new_patch, base_patch, mask_patch)
+            new_patch = res[0]
+            mask_patch = self.calc_patch_mask(base_patch, new_patch,
+                                              coord=idx,
+                                              overlap=self.big_overlap)
+            # apply the mask to each layer
+            for i, y in enumerate(self.Y):
+                base_patch = y[idx[0]:idx[0] + self.big_tilesize,
+                               idx[1]:idx[1] + self.big_tilesize]
+                new_patch = res[i]
+                self.Y[i][idx[0]:idx[0]+self.big_tilesize,
+                          idx[1]:idx[1]+self.big_tilesize, :] = \
+                    filter_img(new_patch, base_patch, mask_patch)
 
         # apply the mask again
         if self.Ymask is not None:
@@ -775,9 +754,7 @@ class Quilt:
         show(self.Y[0]) if self.debug else None
         if self.result_path:
             save(self.Y[0], self.result_path)
-            print 'saving', self.result_path
-
-        return track
+            self.log.info('saving' + self.result_path)
 
     def optimized_compute_small(self, in_queue, out_queue):
 
@@ -786,11 +763,9 @@ class Quilt:
             dst = item['dst']
             mask = item['mask']
             identifier = item['id']
-            tracked = item['tracked']
-            track = {}
 
             num_tiles = self.calc_num_tiles(img_size=dst[0].shape[0:2])
-            print identifier, 'started'
+            self.log.debug('{0} started'.format(identifier))
 
             for i in xrange(num_tiles[0]):
                 startI = i * self.tilesize - i * self.overlap
@@ -816,22 +791,20 @@ class Quilt:
                         continue
 
                     dst_patches = [d[startI:endI, startJ:endJ, :] for d in dst]
-                    res_patches, track_patch = self._compute_patch(
-                           dst_patches, [sizeI, sizeJ], (i, j), mask=self.Xmask,
-                           tracked=None if not tracked else tracked.get((i, j)))
-                    # store the tracking data
-                    track.update(track_patch)
+                    res_patches = self._compute_patch(
+                           dst_patches, [sizeI, sizeJ], (i, j), mask=self.Xmask)
                     # manage the layers
                     for idx, res in enumerate(res_patches):
                         dst[idx][startI:endI, startJ:endJ, :] = res
 
             # show(dst[0], title='FINAL {0}'.format(identifier))
-            out_queue.put([identifier, dst, track])
-            print identifier, ': finished, left', in_queue.qsize()
+            out_queue.put([identifier, dst])
+            self.log.debug('{0}: finished, left {1}'.format(identifier,
+                                                       in_queue.qsize()))
             in_queue.task_done()
 
     def _compute_patch(self, y_patches, tilesize, coord, mask=None,
-                       constraint_start=False, tracked=None, err=None):
+                       constraint_start=False, err=None):
         """
         Given a patch, calculates the resulting one.
           1) finds the best matching patch
@@ -841,46 +814,33 @@ class Quilt:
             y_patches: stack of the patch to be matched
             tilesize: patch size
             coord: tile coordinates in the destination image
-            use_mask: if to use Xmask to remove unwanted parts of the image
+            mask: optional input mask to be used. Default: Xmask
+            constraint_start: if to choose the first tile randomly or take the
+                            first tile of the src image
+            err: amount of error accepted in the minima detection.
 
         Returns:
             Matching patch from the src image, sewed with the input one
         """
 
-        if tracked:
-            # we already know what to choose
-            sub = tracked
-
+        err = err or self.err
+        # Find the best candidates for the match
+        if coord == (0, 0) and constraint_start:
+            # the first one of dst should be the first one of src
+            sub = [0, 0]
         else:
-            err = err or self.err
-            # Find the best candidates for the match
-            if coord == (0, 0) and constraint_start:
-                # the first one of dst should be the first one of src
-                sub = [0, 0]
-            else:
-                # Dist from each tile to the overlap region
-                distances = self.distance(y_patches[0], coord=coord,
-                                          tilesize=tilesize, mask=mask)
-                best = np.min(distances)
-                candidates = where(distances <= (1 + err) * best)
+            # Dist from each tile to the overlap region
+            distances = self.distance(y_patches[0], coord=coord,
+                                      tilesize=tilesize, mask=mask)
+            best = np.min(distances)
+            candidates = where(distances <= (1 + err) * best)
 
-                # choose a random best
-                choice = ceil(rand() * (len(candidates[0]) - 1))
-                sub = [candidates[0][choice], candidates[1][choice]]
+            # choose a random best
+            choice = int(ceil(rand() * (len(candidates[0]) - 1)))
+            sub = [candidates[0][choice], candidates[1][choice]]
 
         x_patch = self.X[0][sub[0]:sub[0] + tilesize[0],
                             sub[1]:sub[1] + tilesize[1]]
-        # dictionary to take track of the choices:
-        track = {coord: sub}
-
-        # preview: do not sew the results together
-        if self.preview:
-            result = []
-            for idx, x in enumerate(self.X):
-                x_patch = x[sub[0]:sub[0] + tilesize[0],
-                            sub[1]:sub[1] + tilesize[1]]
-                result.append(x_patch)
-            return result, track
 
         # sew them together
         patch_mask = self.calc_patch_mask(x_patch, y_patches[0], coord=coord)
@@ -889,4 +849,4 @@ class Quilt:
             x_patch = x[sub[0]:sub[0] + tilesize[0], sub[1]:sub[1]+tilesize[1]]
             result[idx] = filter_img(x_patch, y_patches[idx], patch_mask)
 
-        return result, track
+        return result
