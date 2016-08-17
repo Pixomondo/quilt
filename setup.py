@@ -47,10 +47,10 @@ setup(
     # run-time dependencies (will be installed by pip when the project is
     # installed)
     install_requires=['colorama',
-                      'Click>=6.6',
-                      'numpy>=1.10.4',
-                      'Pillow>=2.7.0',
-                      'PyMaxflow>=1.2.4'],
+                      'Click',
+                      'numpy',
+                      'Pillow',
+                      'PyMaxflow'],
 
     # additional groups of dependencies.
     extras_require={},
