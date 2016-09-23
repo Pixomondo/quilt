@@ -7,6 +7,11 @@
 # Vim / Notepad++ temp files
 *~
 
-# cython compiled files
-*.pyd
-*.c
+# Build Files
+build
+
+# XCF Files
+*.xcf
+
+# Python Eggs
+*.egg-info
