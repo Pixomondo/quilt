@@ -6,3 +6,12 @@
 
 # Vim / Notepad++ temp files
 *~
+
+# Build Files
+build
+
+# XCF Files
+*.xcf
+
+# Python Eggs
+*.egg-info
